@@ -6,7 +6,10 @@
  */
 
 import * as THREE from 'three';
-import type { GraphicsQualityTier } from '../config/graphicsTiers';
+import {
+  GRAPHICS_TIER_PRESETS,
+  type GraphicsQualityTier,
+} from '../config/graphicsTiers';
 import {
   LAB_STATION_CATALOG,
   type LabStationId,
@@ -257,24 +260,59 @@ export class LabPropBuilder {
   private s8CatchSandInstances!: THREE.InstancedMesh;
   private s8FallingSand!: THREE.InstancedMesh;
 
-  // Station 9 refs
+  // Station 9 refs (Photorealistic Multi-Stage Separation Benchmark)
+  private s9SourceBeakerGroup = new THREE.Group();
+  private s9PourStream!: THREE.Mesh;
   private s9BeakerLiquid!: THREE.Mesh;
   private s9BeakerSand!: THREE.InstancedMesh;
   private s9BeakerSaltVision!: THREE.InstancedMesh;
+  private s9FilterSlurryPool!: THREE.Mesh;
+  private s9WetSandCake!: THREE.Mesh;
   private s9FilterSand!: THREE.InstancedMesh;
+  private s9StemStream!: THREE.Mesh;
   private s9FilterDrops!: THREE.InstancedMesh;
+  private s9ErlenmeyerGroup = new THREE.Group();
   private s9FlaskLiquid!: THREE.Mesh;
-  private s9DishLiquid!: THREE.Mesh;
+  private s9FlaskMeniscus!: THREE.Mesh;
   private s9DishSaltCrystals!: THREE.InstancedMesh;
   private s9DishSaltVision!: THREE.InstancedMesh;
   private s9CondenserWater!: THREE.Mesh;
+  private s9CondenserDrops!: THREE.InstancedMesh;
   private s9HotPlateGlowMat!: THREE.MeshStandardMaterial;
+  private s9DialKnobGroup = new THREE.Group();
+  private s9StatusLedMat!: THREE.MeshStandardMaterial;
   private s9BoilingBubbles!: THREE.InstancedMesh;
   private s9VaporVision!: THREE.InstancedMesh;
   private s9UpperMist!: THREE.InstancedMesh;
   private s9HotPlateCanvas!: HTMLCanvasElement;
   private s9HotPlateTex!: THREE.CanvasTexture;
   private lastS9Sig = '';
+  private lastS9SimTime = 0;
+  private lastS9Stage: Station9State['stage'] = 'beaker_ready';
+  private s9FilterAnimProgress = 0;
+  private s9EvapAnimProgress = 0;
+  private readonly s9CrystalOffsets: Array<{
+    x: number;
+    y: number;
+    z: number;
+    rx: number;
+    ry: number;
+    rz: number;
+    baseScale: number;
+    radialOrder: number;
+  }> = [];
+  private readonly s9FilterSandOffsets: Array<{
+    x: number;
+    y: number;
+    z: number;
+    rx: number;
+    ry: number;
+    rz: number;
+    baseScale: number;
+  }> = [];
+
+  private readonly benchSpotLights = new Map<LabStationId, THREE.SpotLight>();
+  private activeFocusId: StationFocusId = 'overview';
 
   // Station 10 refs
   private s10PartASaltCrystals!: THREE.InstancedMesh;
@@ -323,9 +361,14 @@ export class LabPropBuilder {
     this.buildStation8();
     this.buildStation9();
     this.buildStation10();
+
+    this.enableEquipmentShadows();
+    this.syncBenchShadowMaps();
   }
 
   public highlightStation(stationId: StationFocusId): void {
+    this.activeFocusId = stationId;
+    this.syncBenchShadowMaps();
     if (stationId === 'overview') {
       this.selectionRing.visible = false;
       return;
@@ -359,6 +402,52 @@ export class LabPropBuilder {
 
   public setQualityTier(tier: GraphicsQualityTier): void {
     this.qualityTier = tier;
+    this.syncBenchShadowMaps();
+  }
+
+  private enableEquipmentShadows(): void {
+    this.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
+        const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        if (mat && !mat.transparent && mat.visible !== false && obj.position.y < 2.2) {
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+        }
+      }
+    });
+  }
+
+  /**
+   * Enables crisp overhead SpotLight shadows on the focused station workbench (plus priority benches)
+   * while keeping active shadow maps <= 5 so WebGL2's 16-texture-unit limit is never exceeded.
+   */
+  private syncBenchShadowMaps(): void {
+    const shadowsEnabled = GRAPHICS_TIER_PRESETS[this.qualityTier].shadowsEnabled;
+    if (!shadowsEnabled) {
+      for (const spot of this.benchSpotLights.values()) {
+        spot.castShadow = false;
+      }
+      return;
+    }
+
+    const activeShadowSet = new Set<LabStationId>();
+    if (this.activeFocusId !== 'overview') {
+      activeShadowSet.add(this.activeFocusId);
+    }
+    const priorityBenches: LabStationId[] = [
+      'station_9_filtration_evaporation',
+      'station_4_mass_volume',
+      'station_2_hardness_scratch',
+      'station_10_solutions_dissolving',
+    ];
+    for (const pid of priorityBenches) {
+      if (activeShadowSet.size >= 4) break;
+      activeShadowSet.add(pid);
+    }
+
+    for (const [id, spot] of this.benchSpotLights.entries()) {
+      spot.castShadow = activeShadowSet.has(id);
+    }
   }
 
   public onGlassMaterialReplaced(oldMat: THREE.Material, newMat: THREE.Material): void {
@@ -705,13 +794,13 @@ export class LabPropBuilder {
         }
       }
 
-      // True emissive LED indicator strip along promenade bench edge (selective bloom)
+      // Crisp LED indicator strip along promenade bench edge
       const strip = new THREE.Mesh(
         new THREE.BoxGeometry(0.036, 0.032, 2.38),
         new THREE.MeshStandardMaterial({
           color: accentColor,
           emissive: accentColor,
-          emissiveIntensity: 1.45,
+          emissiveIntensity: 0.85,
         }),
       );
       strip.position.set(isWingA ? 0.62 : -0.62, 0.84, 0);
@@ -739,18 +828,23 @@ export class LabPropBuilder {
         new THREE.MeshStandardMaterial({
           color: 0xfffbeb,
           emissive: 0xfef3c7,
-          emissiveIntensity: 1.3,
+          emissiveIntensity: 0.9,
         }),
       );
       ledBar.position.set(0, 2.49, 0);
       benchGroup.add(ledBar);
 
-      // Dedicated warm-white overhead task SpotLight aimed directly onto this benchtop
-      const taskSpot = new THREE.SpotLight(0xfff4e0, 8.2, 4.6, Math.PI / 3.8, 0.48, 1.35);
-      taskSpot.position.set(isWingA ? 0.15 : -0.15, 2.48, 0);
-      taskSpot.castShadow = false; // Keep shadow maps on keyLight only to avoid WebGL texture limit
-      taskSpot.target.position.set(0, 0.92, 0);
+      // Crisp overhead workbench SpotLight (angle: 0.55, penumbra: 0.6, intensity: 3.5)
+      const taskSpot = new THREE.SpotLight(0xfff6ea, 3.5, 6.2, 0.55, 0.6, 1.05);
+      taskSpot.position.set(isWingA ? 0.18 : -0.18, 2.46, 0);
+      taskSpot.shadow.mapSize.set(1024, 1024);
+      taskSpot.shadow.camera.near = 0.4;
+      taskSpot.shadow.camera.far = 3.6;
+      taskSpot.shadow.bias = -0.00025;
+      taskSpot.shadow.normalBias = 0.012;
+      taskSpot.target.position.set(0, 0.915, 0);
       benchGroup.add(taskSpot, taskSpot.target);
+      this.benchSpotLights.set(id, taskSpot);
 
       const placardTex = createPlacardTexture(
         desc.shortLabel.toUpperCase(),
@@ -2288,239 +2382,955 @@ export class LabPropBuilder {
   }
 
   // ============================================================================
-  // STATION 9: SAND & WATER + FULL SALT/SAND/WATER FILTRATION & EVAPORATION
+  // STATION 9: PHOTOREALISTIC SALT, SAND & WATER SEPARATION BENCHMARK
   // ============================================================================
+
+  private createBorosilicateScaleTexture(
+    marksMl: readonly number[],
+    capacityLabel: string,
+  ): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, 256, 256);
+      ctx.strokeStyle = 'rgba(248, 250, 252, 0.92)';
+      ctx.fillStyle = 'rgba(248, 250, 252, 0.95)';
+      ctx.font = 'bold 20px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+
+      // Header capacity stamp
+      ctx.fillText(capacityLabel, 58, 28);
+      ctx.font = 'bold 13px monospace';
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.82)';
+      ctx.fillText('BORO 3.3', 58, 48);
+
+      // Vertical spine + major/minor mL graduation ticks (top = highest mL, bottom = lowest mL)
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(118, 66);
+      ctx.lineTo(118, 234);
+      ctx.stroke();
+
+      ctx.font = 'bold 18px monospace';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      const count = marksMl.length;
+      marksMl.forEach((ml, idx) => {
+        const frac = count > 1 ? idx / (count - 1) : 0.5;
+        const y = 72 + frac * 156;
+        ctx.lineWidth = 3.2;
+        ctx.beginPath();
+        ctx.moveTo(92, y);
+        ctx.lineTo(118, y);
+        ctx.stroke();
+        ctx.fillText(`${ml}`, 126, y + 1);
+
+        if (idx < count - 1) {
+          const midY = y + (156 / (count - 1)) * 0.5;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(104, midY);
+          ctx.lineTo(118, midY);
+          ctx.stroke();
+        }
+      });
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    this.disposableTextures.push(tex);
+    return tex;
+  }
+
+  private buildPleatedFilterConeGeometry(): THREE.BufferGeometry {
+    const radialSegments = 64; // 16 crisp accordion pleats around 360°
+    const heightSegments = 14;
+    const coneHeight = 0.148;
+    const baseRadius = 0.093;
+    const pleatCount = 16;
+
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+
+    for (let j = 0; j <= heightSegments; j++) {
+      const v = j / heightSegments; // 0 at cone apex, 1 at top fluted rim
+      for (let i = 0; i <= radialSegments; i++) {
+        const u = i / radialSegments;
+        const theta = u * Math.PI * 2;
+        const wave = Math.cos(theta * pleatCount);
+        const sharpFold = Math.sign(wave) * Math.pow(Math.abs(wave), 0.68);
+        const r =
+          v === 0
+            ? 0.0015
+            : v * (baseRadius + 0.0085 * sharpFold * Math.pow(v, 0.62));
+        const rimScallop = v > 0.82 ? 0.0028 * sharpFold * ((v - 0.82) / 0.18) : 0;
+        const x = Math.cos(theta) * r;
+        const z = Math.sin(theta) * r;
+        const y = v * coneHeight + rimScallop;
+
+        positions.push(x, y, z);
+        uvs.push(u * 2, v);
+      }
+    }
+
+    const stride = radialSegments + 1;
+    for (let j = 0; j < heightSegments; j++) {
+      for (let i = 0; i < radialSegments; i++) {
+        const a = j * stride + i;
+        const b = a + stride;
+        const c = b + 1;
+        const d = a + 1;
+        indices.push(a, b, d);
+        indices.push(b, c, d);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
 
   private buildStation9(): void {
     const meta = this.stations.station_9_filtration_evaporation;
     const g = new THREE.Group();
     g.position.set(meta.anchorPosition.x, 0.915, meta.anchorPosition.z);
 
-    const glassMat = this.materials.createGlassMaterial(0xe0f2fe);
+    const glassMat = this.materials.createGlassMaterial(0xe6f4ff);
     const steelMat = this.materials.getStandardMaterial('brushedSteel', 1, 1);
     const darkMat = this.materials.getStandardMaterial('anodizedDark', 1, 1);
+    const brassMat = this.materials.getStandardMaterial('brassCollar', 1, 1);
+    const corkMat = this.materials.getStandardMaterial('oakWoodTrim', 1, 1);
     const filterMat = this.materials.getStandardMaterial('filterPaper', 1, 1);
-    const ceramicMat = this.materials.getStandardMaterial('ceramicDish', 1, 1);
     this.s9HotPlateGlowMat = this.materials.getStandardMaterial('heatingElement', 1, 1).clone();
 
-    // Left (z = -0.74): Source Beaker
-    const beaker = this.registerGlass(
-      new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.11, 0.24, 24, 1, true), glassMat),
-    );
-    beaker.position.set(-0.06, 0.12, -0.74);
-    this.tagInteractive(beaker, 'station_9_filtration_evaporation', 'Pour mixture through filter paper', 's9:filter');
-    g.add(beaker);
-
-    this.s9BeakerLiquid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.105, 0.102, 0.14, 20),
-      new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.45, roughness: 0.08 }),
-    );
-    this.s9BeakerLiquid.position.set(-0.06, 0.075, -0.74);
-    g.add(this.s9BeakerLiquid);
-
     const rand = seededRandom(909);
+
+    // ------------------------------------------------------------------------
+    // ZONE 1 (z = -0.76): SOURCE MIXTURE BEAKER (Tilts & pours into funnel!)
+    // ------------------------------------------------------------------------
+    const beakerCoaster = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.098, 0.102, 0.008, 28),
+      darkMat,
+    );
+    beakerCoaster.position.set(-0.04, 0.004, -0.76);
+    g.add(beakerCoaster);
+
+    this.s9SourceBeakerGroup = new THREE.Group();
+    this.s9SourceBeakerGroup.position.set(-0.04, 0.008, -0.76);
+    g.add(this.s9SourceBeakerGroup);
+
+    // Double-walled borosilicate 250 mL beaker (LatheGeometry with rolled rim)
+    const beakerPts = [
+      new THREE.Vector2(0, 0.0),
+      new THREE.Vector2(0.084, 0.0),
+      new THREE.Vector2(0.088, 0.008),
+      new THREE.Vector2(0.088, 0.186),
+      new THREE.Vector2(0.095, 0.194),
+      new THREE.Vector2(0.091, 0.197),
+      new THREE.Vector2(0.083, 0.188),
+      new THREE.Vector2(0.082, 0.008),
+      new THREE.Vector2(0, 0.007),
+    ];
+    const sourceBeakerMesh = this.registerGlass(
+      new THREE.Mesh(new THREE.LatheGeometry(beakerPts, 36), glassMat),
+    );
+    this.tagInteractive(
+      sourceBeakerMesh,
+      'station_9_filtration_evaporation',
+      'Pour salt-sand-water mixture into pleated filter cone',
+      's9:filter',
+    );
+    this.s9SourceBeakerGroup.add(sourceBeakerMesh);
+
+    // Shaped pouring spout lip on +Z rim (tips cleanly into funnel when rotated around +X)
+    const spoutLip = this.registerGlass(
+      new THREE.Mesh(
+        new THREE.CylinderGeometry(0.014, 0.009, 0.022, 12, 1, true, -Math.PI * 0.45, Math.PI * 0.9),
+        glassMat,
+      ),
+    );
+    spoutLip.position.set(0, 0.192, 0.089);
+    spoutLip.rotation.x = 0.42;
+    this.s9SourceBeakerGroup.add(spoutLip);
+
+    // Crisp white borosilicate graduation scale facing student camera (-X)
+    const beakerScaleTex = this.createBorosilicateScaleTexture([200, 150, 100, 50], '250 mL');
+    const beakerScaleDecal = new THREE.Mesh(
+      new THREE.CylinderGeometry(
+        0.0892,
+        0.0892,
+        0.145,
+        24,
+        1,
+        true,
+        Math.PI * 1.18,
+        Math.PI * 0.64,
+      ),
+      new THREE.MeshBasicMaterial({
+        map: beakerScaleTex,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    beakerScaleDecal.position.y = 0.098;
+    this.s9SourceBeakerGroup.add(beakerScaleDecal);
+
+    // Glass stirring rod resting inside source beaker
+    const stirRod = this.registerGlass(
+      new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.24, 10), glassMat),
+    );
+    stirRod.position.set(0.018, 0.118, -0.022);
+    stirRod.rotation.z = -0.22;
+    stirRod.rotation.x = -0.16;
+    this.s9SourceBeakerGroup.add(stirRod);
+
+    // Bottom-anchored murky tan salt-sand-water liquid column inside source beaker
+    const beakerLiqGeo = new THREE.CylinderGeometry(0.0805, 0.08, 1.0, 28);
+    beakerLiqGeo.translate(0, 0.5, 0);
+    this.s9BeakerLiquid = new THREE.Mesh(
+      beakerLiqGeo,
+      new THREE.MeshPhysicalMaterial({
+        color: 0xb59b76,
+        transparent: true,
+        opacity: 0.78,
+        roughness: 0.16,
+        clearcoat: 0.9,
+      }),
+    );
+    this.s9BeakerLiquid.position.set(0, 0.009, 0);
+    this.s9BeakerLiquid.scale.set(1, 0.122, 1);
+    this.s9SourceBeakerGroup.add(this.s9BeakerLiquid);
+
+    // Instanced quartz sand grains + Particle Vision dissolved salt ions inside source beaker
     this.s9BeakerSand = new THREE.InstancedMesh(
-      new THREE.DodecahedronGeometry(0.006, 0),
-      new THREE.MeshStandardMaterial({ color: 0xd9b382, roughness: 0.9 }),
-      220,
+      new THREE.DodecahedronGeometry(0.0054, 0),
+      new THREE.MeshStandardMaterial({ color: 0xd4ae7a, roughness: 0.88 }),
+      240,
     );
-    this.s9BeakerSaltVision = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.007, 6, 6),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, emissive: 0xffffff, emissiveIntensity: 0.65 }),
-      90,
-    );
-    for (let i = 0; i < 220; i++) {
+    for (let i = 0; i < 240; i++) {
       const a = rand() * Math.PI * 2;
-      const r = Math.sqrt(rand()) * 0.09;
-      this.dummy.position.set(-0.06 + Math.cos(a) * r, 0.015 + rand() * 0.02, -0.74 + Math.sin(a) * r);
-      this.dummy.scale.setScalar(1);
+      const r = Math.sqrt(rand()) * 0.074;
+      this.dummy.position.set(Math.cos(a) * r, 0.012 + rand() * 0.022, Math.sin(a) * r);
+      this.dummy.rotation.set(rand() * 3, rand() * 3, rand() * 3);
+      this.dummy.scale.setScalar(0.75 + rand() * 0.55);
       this.dummy.updateMatrix();
       this.s9BeakerSand.setMatrixAt(i, this.dummy.matrix);
     }
     this.s9BeakerSand.instanceMatrix.needsUpdate = true;
-    g.add(this.s9BeakerSand, this.s9BeakerSaltVision);
+    this.s9SourceBeakerGroup.add(this.s9BeakerSand);
 
-    // Center (z = -0.18): Ring Stand + Glass Funnel + Pleated Filter Cone + Erlenmeyer Flask
-    const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.02, 0.28), darkMat);
-    standBase.position.set(0.02, 0.01, -0.18);
-    const standPole = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.68, 12), steelMat);
-    standPole.position.set(0.14, 0.34, -0.18);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.01, 8, 24), steelMat);
-    ring.rotation.x = Math.PI / 2;
-    ring.position.set(-0.04, 0.42, -0.18);
-    const funnel = this.registerGlass(
-      new THREE.Mesh(new THREE.ConeGeometry(0.125, 0.19, 26, 1, true), glassMat),
-    );
-    funnel.rotation.x = Math.PI;
-    funnel.position.set(-0.04, 0.43, -0.18);
-    const paperCone = new THREE.Mesh(new THREE.ConeGeometry(0.114, 0.17, 16, 1, true), filterMat);
-    paperCone.rotation.x = Math.PI;
-    paperCone.position.set(-0.04, 0.44, -0.18);
-    this.tagInteractive(funnel, 'station_9_filtration_evaporation', 'Filter trapped sand from water', 's9:filter');
-
-    // Curved Erlenmeyer receiving flask directly beneath funnel
-    const flaskPts = [
-      new THREE.Vector2(0, 0.005),
-      new THREE.Vector2(0.095, 0.008),
-      new THREE.Vector2(0.088, 0.065),
-      new THREE.Vector2(0.038, 0.155),
-      new THREE.Vector2(0.036, 0.215),
-      new THREE.Vector2(0.044, 0.225),
-    ];
-    const erlenmeyer = this.registerGlass(
-      new THREE.Mesh(new THREE.LatheGeometry(flaskPts, 28), glassMat),
-    );
-    erlenmeyer.position.set(-0.04, 0.02, -0.18);
-    this.s9FlaskLiquid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.042, 0.086, 0.075, 22),
-      new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.48, roughness: 0.06 }),
-    );
-    this.s9FlaskLiquid.position.set(-0.04, 0.065, -0.18);
-    this.s9FlaskLiquid.visible = false;
-
-    this.s9FilterDrops = new THREE.InstancedMesh(
+    this.s9BeakerSaltVision = new THREE.InstancedMesh(
       new THREE.SphereGeometry(0.006, 6, 6),
-      new THREE.MeshPhysicalMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.85 }),
-      20,
+      new THREE.MeshStandardMaterial({
+        color: 0xf8fafc,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.7,
+      }),
+      90,
     );
-    this.s9FilterDrops.visible = false;
-    g.add(standBase, standPole, ring, funnel, paperCone, erlenmeyer, this.s9FlaskLiquid, this.s9FilterDrops);
+    this.s9SourceBeakerGroup.add(this.s9BeakerSaltVision);
+
+    // Dynamic liquid pour stream connecting tilted beaker spout into pleated filter cone
+    this.s9PourStream = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0055, 0.0085, 1.0, 14),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xc2a882,
+        transparent: true,
+        opacity: 0.82,
+        roughness: 0.08,
+        clearcoat: 1.0,
+      }),
+    );
+    this.s9PourStream.visible = false;
+    g.add(this.s9PourStream);
+
+    // ------------------------------------------------------------------------
+    // ZONE 2 (z = -0.16): MULTI-PART RETORT STAND + BOROSILICATE FUNNEL +
+    //                     CONE-FOLDED 16-PLEAT CELLULOSE FILTER PAPER
+    // ------------------------------------------------------------------------
+    const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.018, 0.3), darkMat);
+    standBase.position.set(0.05, 0.013, -0.16);
+    g.add(standBase);
+
+    for (const [fx, fz] of [
+      [-0.06, -0.29],
+      [0.16, -0.29],
+      [-0.06, -0.03],
+      [0.16, -0.03],
+    ] as Array<[number, number]>) {
+      const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.006, 12), darkMat);
+      foot.position.set(fx, 0.003, fz);
+      g.add(foot);
+    }
+
+    // Cork support ring pad on retort base beneath funnel stem
+    const corkPad = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.092, 0.008, 28), corkMat);
+    corkPad.position.set(-0.04, 0.025, -0.16);
+    g.add(corkPad);
+
+    // Threaded stainless rod socket collar + vertical brushed stainless retort rod
+    const rodCollar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.024, 0.026, 18),
+      steelMat,
+    );
+    rodCollar.position.set(0.15, 0.034, -0.16);
+    const standRod = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.009, 0.009, 0.7, 18),
+      steelMat,
+    );
+    standRod.position.set(0.15, 0.375, -0.16);
+    const rodCap = new THREE.Mesh(new THREE.SphereGeometry(0.01, 14, 10), steelMat);
+    rodCap.position.set(0.15, 0.725, -0.16);
+    g.add(rodCollar, standRod, rodCap);
+
+    // Machined bosshead clamp + knurled brass thumbscrews + iron support ring at y = 0.465
+    const bosshead = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.044, 0.038), darkMat);
+    bosshead.position.set(0.15, 0.465, -0.16);
+    const screwA = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.03, 12), brassMat);
+    screwA.rotation.z = Math.PI / 2;
+    screwA.position.set(0.176, 0.465, -0.16);
+    const screwKnobA = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.013, 0.013, 0.009, 16),
+      brassMat,
+    );
+    screwKnobA.rotation.z = Math.PI / 2;
+    screwKnobA.position.set(0.192, 0.465, -0.16);
+    const screwKnobB = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, 0.009, 16),
+      brassMat,
+    );
+    screwKnobB.rotation.x = Math.PI / 2;
+    screwKnobB.position.set(0.15, 0.465, -0.19);
+
+    const ringArm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0055, 0.0055, 0.115, 12),
+      steelMat,
+    );
+    ringArm.rotation.z = Math.PI / 2;
+    ringArm.position.set(0.094, 0.465, -0.16);
+    const supportRing = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.0068, 12, 32), steelMat);
+    supportRing.rotation.x = Math.PI / 2;
+    supportRing.position.set(-0.04, 0.465, -0.16);
+    g.add(bosshead, screwA, screwKnobA, screwKnobB, ringArm, supportRing);
+
+    // Thick-walled refractive borosilicate glass funnel (60° bowl + narrow stem at y = 0.265..0.569)
+    const funnelPts = [
+      new THREE.Vector2(0.0065, 0.0),
+      new THREE.Vector2(0.0108, 0.005),
+      new THREE.Vector2(0.0112, 0.14),
+      new THREE.Vector2(0.104, 0.3),
+      new THREE.Vector2(0.109, 0.305),
+      new THREE.Vector2(0.103, 0.307),
+      new THREE.Vector2(0.098, 0.298),
+      new THREE.Vector2(0.0068, 0.138),
+      new THREE.Vector2(0.0065, 0.0),
+    ];
+    const glassFunnel = this.registerGlass(
+      new THREE.Mesh(new THREE.LatheGeometry(funnelPts, 36), glassMat),
+    );
+    glassFunnel.position.set(-0.04, 0.265, -0.16);
+    this.tagInteractive(
+      glassFunnel,
+      'station_9_filtration_evaporation',
+      'Filter insoluble sand with pleated filter paper',
+      's9:filter',
+    );
+    g.add(glassFunnel);
+
+    // Cone-folded white 16-pleat cellulose filter paper seated inside the glass funnel
+    const pleatedPaperGeo = this.buildPleatedFilterConeGeometry();
+    const pleatedFilterPaper = new THREE.Mesh(pleatedPaperGeo, filterMat);
+    pleatedFilterPaper.position.set(-0.04, 0.41, -0.16);
+    pleatedFilterPaper.castShadow = true;
+    pleatedFilterPaper.receiveShadow = true;
+    this.tagInteractive(
+      pleatedFilterPaper,
+      'station_9_filtration_evaporation',
+      'Pleated cellulose filter paper — traps sand grains while dissolved salt & water pass through',
+      's9:filter',
+    );
+    g.add(pleatedFilterPaper);
+
+    // Murky slurry pool inside pleated filter cone (rises during pour & drains through paper)
+    const slurryGeo = new THREE.ConeGeometry(0.074, 0.112, 28);
+    slurryGeo.rotateX(Math.PI); // Apex at bottom, flat meniscus on top
+    slurryGeo.translate(0, 0.056, 0); // Anchor apex at local y = 0
+    this.s9FilterSlurryPool = new THREE.Mesh(
+      slurryGeo,
+      new THREE.MeshPhysicalMaterial({
+        color: 0xb89f78,
+        transparent: true,
+        opacity: 0.78,
+        roughness: 0.14,
+      }),
+    );
+    this.s9FilterSlurryPool.position.set(-0.04, 0.413, -0.16);
+    this.s9FilterSlurryPool.visible = false;
+    g.add(this.s9FilterSlurryPool);
+
+    // Sculpted wet tan sand filter cake + 220 instanced sand grains lining pleats
+    const sandCakeGeo = new THREE.ConeGeometry(0.052, 0.076, 28);
+    sandCakeGeo.rotateX(Math.PI);
+    sandCakeGeo.translate(0, 0.038, 0);
+    this.s9WetSandCake = new THREE.Mesh(
+      sandCakeGeo,
+      new THREE.MeshStandardMaterial({
+        color: 0xb68f5e,
+        roughness: 0.92,
+        metalness: 0.02,
+      }),
+    );
+    this.s9WetSandCake.position.set(-0.04, 0.412, -0.16);
+    this.s9WetSandCake.visible = false;
+    g.add(this.s9WetSandCake);
 
     this.s9FilterSand = new THREE.InstancedMesh(
-      new THREE.DodecahedronGeometry(0.006, 0),
-      new THREE.MeshStandardMaterial({ color: 0xc29b6a, roughness: 0.92 }),
-      160,
+      new THREE.DodecahedronGeometry(0.0052, 0),
+      new THREE.MeshStandardMaterial({ color: 0xc59e6d, roughness: 0.9 }),
+      220,
     );
-    for (let i = 0; i < 160; i++) {
-      const a = rand() * Math.PI * 2;
-      const r = rand() * 0.065;
-      this.dummy.position.set(-0.04 + Math.cos(a) * r, 0.4 + r * 0.85, -0.18 + Math.sin(a) * r);
-      this.dummy.scale.setScalar(1);
-      this.dummy.updateMatrix();
-      this.s9FilterSand.setMatrixAt(i, this.dummy.matrix);
+    this.s9FilterSandOffsets.length = 0;
+    for (let i = 0; i < 220; i++) {
+      const theta = rand() * Math.PI * 2;
+      const v = Math.pow(rand(), 0.62) * 0.62;
+      const pleatMod = Math.cos(theta * 16) * 0.005 * v;
+      const r = v * (0.084 + pleatMod) * (0.35 + rand() * 0.62);
+      const y = 0.414 + v * 0.135;
+      this.s9FilterSandOffsets.push({
+        x: -0.04 + Math.cos(theta) * r,
+        y,
+        z: -0.16 + Math.sin(theta) * r,
+        rx: rand() * 3,
+        ry: rand() * 3,
+        rz: rand() * 3,
+        baseScale: 0.7 + rand() * 0.65,
+      });
     }
-    this.s9FilterSand.instanceMatrix.needsUpdate = true;
+    this.s9FilterSand.visible = false;
     g.add(this.s9FilterSand);
 
-    // Hot Plate + Porcelain Evaporating Dish + Condenser Tube + Distillate Beaker (z = +0.46 .. +0.96)
-    const hotBase = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.09, 0.36), darkMat);
-    hotBase.position.set(-0.05, 0.045, 0.46);
-    const burner = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.135, 0.016, 26), this.s9HotPlateGlowMat);
-    burner.position.set(-0.05, 0.095, 0.46);
-    const dishPts = [
-      new THREE.Vector2(0, 0.005),
-      new THREE.Vector2(0.09, 0.008),
-      new THREE.Vector2(0.145, 0.065),
-      new THREE.Vector2(0.135, 0.07),
-      new THREE.Vector2(0.085, 0.018),
-      new THREE.Vector2(0, 0.016),
+    // Clear filtrate thread inside funnel stem + discrete falling filtrate drops
+    this.s9StemStream = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0042, 0.0038, 0.136, 10),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xbae6fd,
+        transparent: true,
+        opacity: 0.72,
+        roughness: 0.05,
+      }),
+    );
+    this.s9StemStream.position.set(-0.04, 0.334, -0.16);
+    this.s9StemStream.visible = false;
+    g.add(this.s9StemStream);
+
+    this.s9FilterDrops = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.0052, 10, 10),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.88,
+        roughness: 0.03,
+        clearcoat: 1.0,
+      }),
+      14,
+    );
+    this.s9FilterDrops.visible = false;
+    g.add(this.s9FilterDrops);
+
+    // ------------------------------------------------------------------------
+    // MOVABLE GRADUATED ERLENMEYER RECEIVING FLASK (Transfers onto Hot Plate!)
+    // ------------------------------------------------------------------------
+    this.s9ErlenmeyerGroup = new THREE.Group();
+    this.s9ErlenmeyerGroup.position.set(-0.04, 0.029, -0.16);
+    g.add(this.s9ErlenmeyerGroup);
+
+    const erlenmeyerPts = [
+      new THREE.Vector2(0, 0.0),
+      new THREE.Vector2(0.078, 0.0),
+      new THREE.Vector2(0.084, 0.014),
+      new THREE.Vector2(0.028, 0.154),
+      new THREE.Vector2(0.028, 0.204),
+      new THREE.Vector2(0.034, 0.212),
+      new THREE.Vector2(0.03, 0.214),
+      new THREE.Vector2(0.024, 0.203),
+      new THREE.Vector2(0.024, 0.152),
+      new THREE.Vector2(0.079, 0.016),
+      new THREE.Vector2(0.074, 0.007),
+      new THREE.Vector2(0, 0.007),
     ];
-    const dish = new THREE.Mesh(new THREE.LatheGeometry(dishPts, 28), ceramicMat);
-    dish.position.set(-0.05, 0.102, 0.46);
-    this.tagInteractive(hotBase, 'station_9_filtration_evaporation', 'Evaporate water at 100°C / 212°F', 's9:evaporate');
-    this.tagInteractive(dish, 'station_9_filtration_evaporation', 'Heat dish to recover dissolved salt', 's9:evaporate');
-    g.add(hotBase, burner, dish);
+    const erlenmeyerMesh = this.registerGlass(
+      new THREE.Mesh(new THREE.LatheGeometry(erlenmeyerPts, 36), glassMat),
+    );
+    this.tagInteractive(
+      erlenmeyerMesh,
+      'station_9_filtration_evaporation',
+      'Transfer clear filtrate flask to hot plate & boil at 100°C (212°F)',
+      's9:evaporate',
+    );
+    this.s9ErlenmeyerGroup.add(erlenmeyerMesh);
 
-    this.s9DishLiquid = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.085, 0.04, 24),
-      new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.5, roughness: 0.06 }),
+    // Conical white graduation scale decal wrapped on camera-facing (-X) wall of Erlenmeyer flask
+    const flaskScaleTex = this.createBorosilicateScaleTexture([200, 150, 100, 50], '250 mL');
+    const flaskDecalPts = [
+      new THREE.Vector2(0.083, 0.022),
+      new THREE.Vector2(0.033, 0.146),
+    ];
+    const flaskScaleDecal = new THREE.Mesh(
+      new THREE.LatheGeometry(flaskDecalPts, 24, Math.PI * 1.18, Math.PI * 0.64),
+      new THREE.MeshBasicMaterial({
+        map: flaskScaleTex,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
     );
-    this.s9DishLiquid.position.set(-0.05, 0.135, 0.46);
-    g.add(this.s9DishLiquid);
+    this.s9ErlenmeyerGroup.add(flaskScaleDecal);
 
-    this.s9DishSaltCrystals = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.009, 0.009, 0.009),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 }),
-      180,
+    // Bottom-anchored clear salt-water filtrate inside Erlenmeyer flask
+    const flaskLiqGeo = new THREE.CylinderGeometry(0.68, 0.98, 1.0, 28);
+    flaskLiqGeo.translate(0, 0.5, 0);
+    this.s9FlaskLiquid = new THREE.Mesh(
+      flaskLiqGeo,
+      new THREE.MeshPhysicalMaterial({
+        color: 0xbae6fd,
+        transparent: true,
+        opacity: 0.46,
+        roughness: 0.04,
+        clearcoat: 1.0,
+      }),
     );
-    this.s9DishSaltVision = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.007, 6, 6),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xf8fafc, emissiveIntensity: 0.68 }),
-      80,
-    );
-    for (let i = 0; i < 180; i++) {
-      const a = rand() * Math.PI * 2;
-      const r = Math.sqrt(rand()) * 0.095;
-      this.dummy.position.set(-0.05 + Math.cos(a) * r, 0.122 + rand() * 0.008, 0.46 + Math.sin(a) * r);
-      this.dummy.rotation.set(rand(), rand(), rand());
-      this.dummy.scale.setScalar(1);
-      this.dummy.updateMatrix();
-      this.s9DishSaltCrystals.setMatrixAt(i, this.dummy.matrix);
-    }
-    this.s9DishSaltCrystals.instanceMatrix.needsUpdate = true;
-    g.add(this.s9DishSaltCrystals, this.s9DishSaltVision);
+    this.s9FlaskLiquid.position.set(0, 0.008, 0);
+    this.s9FlaskLiquid.visible = false;
+    this.s9ErlenmeyerGroup.add(this.s9FlaskLiquid);
 
-    // Overhead Condenser Dome + Angled TubeGeometry + Pure Distillate Beaker
-    const hood = this.registerGlass(
-      new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.165, 0.2, 24, 1, true), glassMat),
+    // Bright concave meniscus surface rim ring inside Erlenmeyer flask
+    this.s9FlaskMeniscus = new THREE.Mesh(
+      new THREE.TorusGeometry(1.0, 0.035, 8, 28),
+      new THREE.MeshBasicMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.72,
+      }),
     );
-    hood.position.set(-0.05, 0.46, 0.46);
-    const tubeCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.05, 0.56, 0.46),
-      new THREE.Vector3(-0.05, 0.62, 0.62),
-      new THREE.Vector3(-0.05, 0.42, 0.8),
-      new THREE.Vector3(-0.05, 0.18, 0.94),
-    ]);
-    const condenserTube = this.registerGlass(
-      new THREE.Mesh(new THREE.TubeGeometry(tubeCurve, 24, 0.018, 12, false), glassMat),
-    );
-    const distBeaker = this.registerGlass(
-      new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.084, 0.17, 22, 1, true), glassMat),
-    );
-    distBeaker.position.set(-0.05, 0.085, 0.94);
+    this.s9FlaskMeniscus.rotation.x = Math.PI / 2;
+    this.s9FlaskMeniscus.visible = false;
+    this.s9ErlenmeyerGroup.add(this.s9FlaskMeniscus);
 
-    this.s9CondenserWater = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.078, 0.085, 20),
-      new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.52 }),
-    );
-    this.s9CondenserWater.position.set(-0.05, 0.048, 0.94);
-    g.add(hood, condenserTube, distBeaker, this.s9CondenserWater);
-
+    // Nucleate boiling bubbles rising inside the Erlenmeyer flask on the hot plate
     this.s9BoilingBubbles = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.008, 6, 6),
-      new THREE.MeshStandardMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.8 }),
-      28,
-    );
-    this.s9VaporVision = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.01, 6, 6),
-      new THREE.MeshStandardMaterial({ color: 0x7dd3fc, emissive: 0x0284c7, emissiveIntensity: 0.8 }),
+      new THREE.SphereGeometry(0.0052, 8, 8),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xf0f9ff,
+        transparent: true,
+        opacity: 0.82,
+        roughness: 0.04,
+        clearcoat: 1.0,
+      }),
       36,
     );
-    this.s9UpperMist = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.022, 6, 6),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, transparent: true, opacity: 0.35, depthWrite: false }),
-      22,
-    );
-    g.add(this.s9BoilingBubbles, this.s9VaporVision, this.s9UpperMist);
+    this.s9BoilingBubbles.visible = false;
+    this.s9ErlenmeyerGroup.add(this.s9BoilingBubbles);
 
-    // Hot Plate Digital LCD
+    // 200 sparkling white cubic NaCl salt crystals growing across flat floor of Erlenmeyer flask
+    this.s9DishSaltCrystals = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.0072, 0.0072, 0.0072),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xffffff,
+        roughness: 0.14,
+        metalness: 0.02,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08,
+        reflectivity: 0.95,
+      }),
+      200,
+    );
+    this.s9CrystalOffsets.length = 0;
+    for (let i = 0; i < 200; i++) {
+      const a = rand() * Math.PI * 2;
+      // Slight ring concentration + uniform inner floor spread like real evaporated salt crust
+      const uRad = i < 65 ? 0.75 + rand() * 0.23 : Math.sqrt(rand()) * 0.88;
+      const r = uRad * 0.068;
+      this.s9CrystalOffsets.push({
+        x: Math.cos(a) * r,
+        y: 0.009 + rand() * 0.007,
+        z: Math.sin(a) * r,
+        rx: (rand() - 0.5) * 0.35,
+        ry: rand() * Math.PI * 2,
+        rz: (rand() - 0.5) * 0.35,
+        baseScale: 0.65 + rand() * 0.72,
+        radialOrder: 1 - uRad * 0.65 + rand() * 0.25,
+      });
+    }
+    this.s9DishSaltCrystals.visible = false;
+    this.s9ErlenmeyerGroup.add(this.s9DishSaltCrystals);
+
+    // Particle Vision dissolved salt ions inside Erlenmeyer filtrate
+    this.s9DishSaltVision = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.0058, 6, 6),
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        emissive: 0xf8fafc,
+        emissiveIntensity: 0.7,
+      }),
+      80,
+    );
+    this.s9DishSaltVision.visible = false;
+    this.s9ErlenmeyerGroup.add(this.s9DishSaltVision);
+
+    // ------------------------------------------------------------------------
+    // ZONE 3 (z = +0.46 .. +0.96): DIGITAL CERAMIC-TOP HOT PLATE + ROTARY DIAL
+    //                              + INVISIBLE-VAPOR ZONE + GLASS CONDENSER
+    // ------------------------------------------------------------------------
+    const hotChassis = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.082, 0.34), steelMat);
+    hotChassis.position.set(-0.03, 0.045, 0.46);
+    this.tagInteractive(
+      hotChassis,
+      'station_9_filtration_evaporation',
+      'Heat ceramic hot plate to 100°C / 212°F to evaporate water & crystallize salt',
+      's9:evaporate',
+    );
+    g.add(hotChassis);
+
+    for (const [hx, hz] of [
+      [-0.16, 0.32],
+      [0.1, 0.32],
+      [-0.16, 0.6],
+      [0.1, 0.6],
+    ] as Array<[number, number]>) {
+      const hpFoot = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.018, 0.008, 12), darkMat);
+      hpFoot.position.set(hx, 0.004, hz);
+      g.add(hpFoot);
+    }
+
+    // Dark vitroceramic glass-ceramic top plate + circular radiant red-orange heating coil
+    const ceramicTopMat = new THREE.MeshPhysicalMaterial({
+      color: 0x121821,
+      roughness: 0.14,
+      metalness: 0.08,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.08,
+    });
+    const ceramicTop = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.012, 0.26), ceramicTopMat);
+    ceramicTop.position.set(-0.04, 0.092, 0.46);
+    this.tagInteractive(
+      ceramicTop,
+      'station_9_filtration_evaporation',
+      'Ceramic hot plate top — heats salt solution to 100°C (212°F)',
+      's9:evaporate',
+    );
+    g.add(ceramicTop);
+
+    const heatingCoilDisc = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 0.004, 32),
+      this.s9HotPlateGlowMat,
+    );
+    heatingCoilDisc.position.set(-0.04, 0.0975, 0.46);
+    const safetyRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.094, 0.1, 36),
+      new THREE.MeshBasicMaterial({
+        color: 0xe2e8f0,
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+      }),
+    );
+    safetyRing.rotation.x = -Math.PI / 2;
+    safetyRing.position.set(-0.04, 0.099, 0.46);
+    g.add(heatingCoilDisc, safetyRing);
+
+    // Sloped front control console facing student camera (-X) with LED + Rotary Dial Knob
+    const frontConsole = new THREE.Group();
+    frontConsole.position.set(-0.205, 0.04, 0.46);
+    frontConsole.rotation.z = 0.34; // Angled upward toward student camera on -X side
+    g.add(frontConsole);
+
+    const consoleHousing = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.068, 0.32), darkMat);
+    this.tagInteractive(
+      consoleHousing,
+      'station_9_filtration_evaporation',
+      'Turn temperature dial to 100°C (212°F)',
+      's9:evaporate',
+    );
+    frontConsole.add(consoleHousing);
+
+    // Crisp digital LED screen on left side of front console
     this.s9HotPlateCanvas = document.createElement('canvas');
     this.s9HotPlateCanvas.width = 256;
     this.s9HotPlateCanvas.height = 96;
     this.s9HotPlateTex = new THREE.CanvasTexture(this.s9HotPlateCanvas);
     this.s9HotPlateTex.colorSpace = THREE.SRGBColorSpace;
     this.disposableTextures.push(this.s9HotPlateTex);
-    const lcd = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.24, 0.085),
+
+    const lcdScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.18, 0.054),
       new THREE.MeshBasicMaterial({ map: this.s9HotPlateTex }),
     );
-    lcd.position.set(-0.235, 0.048, 0.46);
-    lcd.rotation.y = -Math.PI / 2;
-    g.add(lcd);
+    lcdScreen.position.set(-0.029, 0.002, -0.052);
+    lcdScreen.rotation.y = -Math.PI / 2;
+    frontConsole.add(lcdScreen);
+
+    // Status indicator LED + Rotary Temperature Dial Knob on right side of front console
+    this.s9StatusLedMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.6,
+    });
+    const statusLed = new THREE.Mesh(new THREE.SphereGeometry(0.0055, 10, 10), this.s9StatusLedMat);
+    statusLed.position.set(-0.029, 0.018, 0.062);
+    frontConsole.add(statusLed);
+
+    const dialBezel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.023, 0.025, 0.005, 24),
+      steelMat,
+    );
+    dialBezel.rotation.z = Math.PI / 2;
+    dialBezel.position.set(-0.029, -0.002, 0.105);
+    frontConsole.add(dialBezel);
+
+    this.s9DialKnobGroup = new THREE.Group();
+    this.s9DialKnobGroup.position.set(-0.036, -0.002, 0.105);
+    const knobBody = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.017, 0.019, 0.018, 20),
+      darkMat,
+    );
+    knobBody.rotation.z = Math.PI / 2;
+    const knobPointer = new THREE.Mesh(
+      new THREE.BoxGeometry(0.02, 0.015, 0.0035),
+      new THREE.MeshBasicMaterial({ color: 0xf8fafc }),
+    );
+    knobPointer.position.set(-0.002, 0.007, 0);
+    this.s9DialKnobGroup.add(knobBody, knobPointer);
+    this.tagInteractive(
+      knobBody,
+      'station_9_filtration_evaporation',
+      'Turn rotary dial to 100°C (212°F)',
+      's9:evaporate',
+    );
+    frontConsole.add(this.s9DialKnobGroup);
+
+    // Secondary condenser support post + glass vapor hood (positioned ABOVE clear invisible-vapor gap!)
+    const condStandPost = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0075, 0.0075, 0.62, 14),
+      steelMat,
+    );
+    condStandPost.position.set(0.14, 0.31, 0.72);
+    const condClampArm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.005, 0.005, 0.28, 10),
+      steelMat,
+    );
+    condClampArm.rotation.x = Math.PI / 2;
+    condClampArm.rotation.z = 0.55;
+    condClampArm.position.set(0.05, 0.52, 0.59);
+    g.add(condStandPost, condClampArm);
+
+    const hoodPts = [
+      new THREE.Vector2(0.095, 0.44),
+      new THREE.Vector2(0.088, 0.47),
+      new THREE.Vector2(0.024, 0.57),
+      new THREE.Vector2(0.018, 0.59),
+    ];
+    const condenserHood = this.registerGlass(
+      new THREE.Mesh(new THREE.LatheGeometry(hoodPts, 28), glassMat),
+    );
+    condenserHood.position.set(-0.04, 0, 0.46);
+
+    const tubeCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(-0.04, 0.585, 0.46),
+      new THREE.Vector3(-0.04, 0.635, 0.62),
+      new THREE.Vector3(-0.04, 0.43, 0.81),
+      new THREE.Vector3(-0.04, 0.195, 0.94),
+    ]);
+    const condenserTube = this.registerGlass(
+      new THREE.Mesh(new THREE.TubeGeometry(tubeCurve, 28, 0.014, 12, false), glassMat),
+    );
+
+    // Pure Distillate Recovery Beaker (z = +0.94)
+    const distPts = [
+      new THREE.Vector2(0, 0.0),
+      new THREE.Vector2(0.072, 0.0),
+      new THREE.Vector2(0.075, 0.158),
+      new THREE.Vector2(0.08, 0.165),
+      new THREE.Vector2(0.076, 0.167),
+      new THREE.Vector2(0.07, 0.157),
+      new THREE.Vector2(0.069, 0.006),
+      new THREE.Vector2(0, 0.006),
+    ];
+    const distBeaker = this.registerGlass(
+      new THREE.Mesh(new THREE.LatheGeometry(distPts, 28), glassMat),
+    );
+    distBeaker.position.set(-0.04, 0.006, 0.94);
+
+    const distWaterGeo = new THREE.CylinderGeometry(0.067, 0.066, 1.0, 24);
+    distWaterGeo.translate(0, 0.5, 0);
+    this.s9CondenserWater = new THREE.Mesh(
+      distWaterGeo,
+      new THREE.MeshPhysicalMaterial({
+        color: 0x7dd3fc,
+        transparent: true,
+        opacity: 0.48,
+        roughness: 0.04,
+        clearcoat: 1.0,
+      }),
+    );
+    this.s9CondenserWater.position.set(-0.04, 0.012, 0.94);
+    this.s9CondenserWater.visible = false;
+    g.add(condenserHood, condenserTube, distBeaker, this.s9CondenserWater);
+
+    this.s9CondenserDrops = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.005, 8, 8),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.88,
+        roughness: 0.04,
+      }),
+      10,
+    );
+    this.s9CondenserDrops.visible = false;
+    g.add(this.s9CondenserDrops);
+
+    // Particle Vision invisible water-vapor molecules (in the clear gap y = 0.32..0.44)
+    // + Condensed white mist droplets ONLY higher up inside the cool condenser hood (y = 0.45..0.56)
+    this.s9VaporVision = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.0085, 6, 6),
+      new THREE.MeshStandardMaterial({
+        color: 0x7dd3fc,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.85,
+      }),
+      36,
+    );
+    this.s9VaporVision.visible = false;
+
+    this.s9UpperMist = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.018, 8, 8),
+      new THREE.MeshStandardMaterial({
+        color: 0xf8fafc,
+        transparent: true,
+        opacity: 0.28,
+        depthWrite: false,
+      }),
+      24,
+    );
+    this.s9UpperMist.visible = false;
+    g.add(this.s9VaporVision, this.s9UpperMist);
 
     this.root.add(g);
   }
 
-  private syncStation9(state: Station9State, pourPulse: number, evapPulse: number, t: number): void {
-    this.s9BeakerLiquid.visible = state.beakerWaterGrams > 0.5;
-    this.s9BeakerSand.visible = state.beakerSandGrams > 0.5;
-    this.s9BeakerSaltVision.visible = this.particleVisionEnabled && state.beakerSaltGrams > 0.5;
+  private syncStation9(
+    state: Station9State,
+    pourPulse: number,
+    evapPulse: number,
+    t: number,
+  ): void {
+    const dt = Math.max(0, Math.min(0.08, t - this.lastS9SimTime));
+    this.lastS9SimTime = t;
+
+    const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+    const smooth01 = (v: number): number => {
+      const c = clamp01(v);
+      return c * c * (3 - 2 * c);
+    };
+
+    // Detect stage transitions so live clicks play full multi-second choreography while JSON imports snap cleanly
+    if (state.stage !== this.lastS9Stage) {
+      if (state.stage === 'beaker_ready' || state.stage === 'stirred') {
+        this.s9FilterAnimProgress = 0;
+        this.s9EvapAnimProgress = 0;
+      } else if (state.stage === 'filtered') {
+        this.s9FilterAnimProgress = pourPulse > 0.05 ? 0 : 1;
+        this.s9EvapAnimProgress = 0;
+      } else if (state.stage === 'evaporated') {
+        this.s9FilterAnimProgress = 1;
+        this.s9EvapAnimProgress = evapPulse > 0.05 ? 0 : 1;
+      }
+      this.lastS9Stage = state.stage;
+    }
+
+    if (state.stage === 'filtered' && this.s9FilterAnimProgress < 1) {
+      this.s9FilterAnimProgress = Math.min(1, this.s9FilterAnimProgress + dt / 3.2);
+    } else if (state.stage === 'evaporated') {
+      this.s9FilterAnimProgress = 1;
+      if (this.s9EvapAnimProgress < 1) {
+        this.s9EvapAnimProgress = Math.min(1, this.s9EvapAnimProgress + dt / 5.2);
+      }
+    } else if (state.stage === 'beaker_ready' || state.stage === 'stirred') {
+      this.s9FilterAnimProgress = 0;
+      this.s9EvapAnimProgress = 0;
+    }
+
+    const pFilter = this.s9FilterAnimProgress;
+    const pEvap = this.s9EvapAnimProgress;
+
+    // ------------------------------------------------------------------------
+    // STAGE 1 & 2: TILTING BEAKER POUR + PLEATED FILTRATION DRIP + WET SAND CAKE
+    // ------------------------------------------------------------------------
+    let liftFrac = 0;
+    let tiltRad = 0;
+    let streamActive = false;
+    if (state.stage === 'filtered' && pFilter < 0.76) {
+      if (pFilter < 0.16) {
+        liftFrac = smooth01(pFilter / 0.16);
+        tiltRad = smooth01(Math.max(0, (pFilter - 0.06) / 0.1)) * 1.18;
+      } else if (pFilter < 0.56) {
+        liftFrac = 1;
+        tiltRad = 1.18 + Math.sin((pFilter - 0.16) * 14) * 0.025;
+        streamActive = true;
+      } else {
+        const ret = smooth01((pFilter - 0.56) / 0.2);
+        liftFrac = 1 - ret;
+        tiltRad = (1 - ret) * 1.18;
+      }
+    }
+
+    const bx = -0.04;
+    const by = 0.008 + liftFrac * 0.585 + Math.sin(liftFrac * Math.PI) * 0.05;
+    const bz = -0.76 + (-0.37 - -0.76) * liftFrac;
+    this.s9SourceBeakerGroup.position.set(bx, by, bz);
+    this.s9SourceBeakerGroup.rotation.set(tiltRad, 0, 0);
+
+    // Source beaker murky liquid & sand level drains smoothly during the pour window (0.14..0.56)
+    const sourceRemainFrac =
+      state.stage === 'beaker_ready' || state.stage === 'stirred'
+        ? clamp01(state.beakerWaterGrams / 100)
+        : clamp01(1 - smooth01((pFilter - 0.14) / 0.42));
+
+    this.s9BeakerLiquid.visible = sourceRemainFrac > 0.015;
+    if (this.s9BeakerLiquid.visible) {
+      this.s9BeakerLiquid.scale.set(1, Math.max(0.004, 0.122 * sourceRemainFrac), 1);
+      // Tilt compensation so liquid stays fuller toward pouring lip while tilting
+      this.s9BeakerLiquid.rotation.x = -tiltRad * 0.38;
+    }
+
+    const sourceSandFrac =
+      state.stage === 'beaker_ready' || state.stage === 'stirred'
+        ? clamp01(state.beakerSandGrams / 25)
+        : clamp01(1 - smooth01((pFilter - 0.16) / 0.4));
+    this.s9BeakerSand.visible = sourceSandFrac > 0.02;
+    if (this.s9BeakerSand.visible) {
+      this.s9BeakerSand.count = Math.max(1, Math.round(240 * sourceSandFrac));
+    }
+
+    this.s9BeakerSaltVision.visible =
+      this.particleVisionEnabled &&
+      (state.mode === 'mode_b_salt_sand_water' || state.beakerSaltGrams > 0.5) &&
+      sourceRemainFrac > 0.05;
     if (this.s9BeakerSaltVision.visible) {
+      const maxH = 0.11 * sourceRemainFrac;
       for (let i = 0; i < 90; i++) {
-        const ang = i * 1.9 + t * 0.8;
-        const r = 0.015 + ((i * 11) % 100) * 0.0008;
-        const y = 0.02 + ((i * 7) % 100) * 0.001;
-        this.dummy.position.set(-0.06 + Math.cos(ang) * r, y, -0.74 + Math.sin(ang) * r);
+        const ang = i * 1.9 + t * 0.85;
+        const r = 0.012 + ((i * 11) % 100) * 0.0006;
+        const y = 0.014 + (((i * 7) % 100) / 100) * maxH;
+        this.dummy.position.set(Math.cos(ang) * r, y, Math.sin(ang) * r);
+        this.dummy.rotation.set(0, 0, 0);
         this.dummy.scale.setScalar(1);
         this.dummy.updateMatrix();
         this.s9BeakerSaltVision.setMatrixAt(i, this.dummy.matrix);
@@ -2528,34 +3338,251 @@ export class LabPropBuilder {
       this.s9BeakerSaltVision.instanceMatrix.needsUpdate = true;
     }
 
-    this.s9FilterSand.visible = state.filterTrappedSandGrams > 0.5;
-    this.s9FlaskLiquid.visible = state.stage === 'filtered';
-    this.s9FilterDrops.visible = pourPulse > 0.05;
-    if (this.s9FilterDrops.visible) {
-      for (let i = 0; i < 20; i++) {
-        const phase = (t * 2.1 + i * 0.17) % 1;
+    // Dynamic murky pour stream from tilted spout lip down into pleated filter cone
+    this.s9PourStream.visible = streamActive;
+    if (streamActive) {
+      const cosT = Math.cos(tiltRad);
+      const sinT = Math.sin(tiltRad);
+      const spoutY = by + 0.192 * cosT - 0.092 * sinT;
+      const spoutZ = bz + 0.192 * sinT + 0.092 * cosT;
+      const targetY = 0.465;
+      const targetZ = -0.16;
+      const dy = spoutY - targetY;
+      const dz = spoutZ - targetZ;
+      const len = Math.max(0.04, Math.hypot(dy, dz));
+      this.s9PourStream.position.set(-0.04, (spoutY + targetY) * 0.5, (spoutZ + targetZ) * 0.5);
+      this.s9PourStream.rotation.set(-Math.atan2(dz, dy), 0, 0);
+      const pulseW = 0.88 + Math.sin(t * 28) * 0.14;
+      this.s9PourStream.scale.set(pulseW, len, pulseW);
+    }
+
+    // Slurry pool inside pleated filter cone rises during pour (0.14..0.52) and drains (0.52..0.95)
+    let slurryFrac = 0;
+    if (state.stage === 'filtered' && pFilter > 0.14 && pFilter < 0.96) {
+      if (pFilter < 0.52) {
+        slurryFrac = smooth01((pFilter - 0.14) / 0.38);
+      } else {
+        slurryFrac = 1 - smooth01((pFilter - 0.52) / 0.44);
+      }
+    }
+    this.s9FilterSlurryPool.visible = slurryFrac > 0.02;
+    if (this.s9FilterSlurryPool.visible) {
+      const s = 0.22 + slurryFrac * 0.78;
+      this.s9FilterSlurryPool.scale.set(s, s, s);
+    }
+
+    // Wet sand filter cake accumulates inside the 16-pleat filter paper cone and stays trapped
+    const sandCakeFrac =
+      state.filterTrappedSandGrams > 0.5
+        ? state.stage === 'filtered'
+          ? smooth01((pFilter - 0.18) / 0.48)
+          : 1
+        : 0;
+    this.s9WetSandCake.visible = sandCakeFrac > 0.02;
+    if (this.s9WetSandCake.visible) {
+      const cs = 0.25 + sandCakeFrac * 0.75;
+      this.s9WetSandCake.scale.set(cs, cs, cs);
+    }
+
+    this.s9FilterSand.visible = sandCakeFrac > 0.03;
+    if (this.s9FilterSand.visible) {
+      const activeGrains = Math.max(1, Math.round(this.s9FilterSandOffsets.length * sandCakeFrac));
+      this.s9FilterSand.count = activeGrains;
+      for (let i = 0; i < activeGrains; i++) {
+        const o = this.s9FilterSandOffsets[i]!;
+        this.dummy.position.set(o.x, o.y, o.z);
+        this.dummy.rotation.set(o.rx, o.ry, o.rz);
+        this.dummy.scale.setScalar(o.baseScale * (0.4 + 0.6 * sandCakeFrac));
+        this.dummy.updateMatrix();
+        this.s9FilterSand.setMatrixAt(i, this.dummy.matrix);
+      }
+      this.s9FilterSand.instanceMatrix.needsUpdate = true;
+    }
+
+    // Clear filtrate dripping drop-by-drop from funnel stem (y = 0.265) into Erlenmeyer flask
+    const drippingActive = state.stage === 'filtered' && pFilter > 0.2 && pFilter < 0.99;
+    this.s9StemStream.visible = drippingActive;
+    this.s9FilterDrops.visible = drippingActive;
+    if (drippingActive) {
+      for (let i = 0; i < 14; i++) {
+        const phase = (t * 2.35 + i / 14) % 1;
+        // Gravitational acceleration from stem tip (y = 0.265) down to flask liquid surface (y = 0.085)
+        const dropY = 0.265 - phase * phase * 0.185;
+        const stretch = 1 + phase * 0.45;
         this.dummy.position.set(
-          -0.04 + Math.sin(i * 1.4) * 0.008,
-          0.32 - phase * 0.21,
-          -0.18 + Math.cos(i * 1.1) * 0.008,
+          -0.04 + Math.sin(i * 2.1) * 0.0018,
+          dropY,
+          -0.16 + Math.cos(i * 1.7) * 0.0018,
         );
-        this.dummy.scale.setScalar(1);
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.set(0.88, stretch, 0.88);
         this.dummy.updateMatrix();
         this.s9FilterDrops.setMatrixAt(i, this.dummy.matrix);
       }
       this.s9FilterDrops.instanceMatrix.needsUpdate = true;
     }
 
-    this.s9DishLiquid.visible = state.dishWaterGrams > 0.5;
-    this.s9DishSaltCrystals.visible = state.dishCrystallizedSaltGrams > 0.5;
-    this.s9CondenserWater.visible = state.condenserCapturedWaterGrams > 0.5;
+    // ------------------------------------------------------------------------
+    // STAGE 3: FLASK TRANSFER TO HOT PLATE + ROTARY DIAL + BOILING + SALT CRYSTALS
+    // ------------------------------------------------------------------------
+    const transferFrac = state.stage === 'evaporated' ? smooth01(pEvap / 0.22) : 0;
+    // Slide slightly forward (-X) along a graceful arc so the tall flask neck clears the funnel stem cleanly!
+    const flaskX = -0.04 - Math.sin(transferFrac * Math.PI) * 0.145;
+    const flaskY =
+      0.029 + (0.099 - 0.029) * transferFrac + Math.sin(transferFrac * Math.PI) * 0.095;
+    const flaskZ = -0.16 + (0.46 - -0.16) * transferFrac;
+    this.s9ErlenmeyerGroup.position.set(flaskX, flaskY, flaskZ);
+    this.s9ErlenmeyerGroup.rotation.set(Math.sin(transferFrac * Math.PI) * 0.06, 0, 0);
 
-    this.s9DishSaltVision.visible = this.particleVisionEnabled && state.dishDissolvedSaltGrams > 0.5;
+    // Clear filtrate fill level inside the graduated Erlenmeyer flask:
+    // - Rises smoothly from 0 -> 1 during filtration (0.22..0.98)
+    // - Holds at 1 during transfer onto the hot plate (0.00..0.30)
+    // - Lowers smoothly from 1 -> 0 as water boils away at 100°C (0.30..0.93)
+    let flaskFillFrac = 0;
+    if (state.stage === 'filtered') {
+      flaskFillFrac = smooth01((pFilter - 0.22) / 0.76);
+    } else if (state.stage === 'evaporated') {
+      flaskFillFrac = 1 - smooth01((pEvap - 0.3) / 0.63);
+    }
+
+    this.s9FlaskLiquid.visible = flaskFillFrac > 0.012;
+    this.s9FlaskMeniscus.visible = flaskFillFrac > 0.02;
+    const currentLiquidH = 0.068 * flaskFillFrac;
+    if (this.s9FlaskLiquid.visible) {
+      this.s9FlaskLiquid.scale.set(0.076, Math.max(0.002, currentLiquidH), 0.076);
+    }
+    if (this.s9FlaskMeniscus.visible) {
+      const meniscusRadius = Math.max(0.032, 0.074 - currentLiquidH * 0.34);
+      this.s9FlaskMeniscus.position.set(0, 0.008 + currentLiquidH, 0);
+      this.s9FlaskMeniscus.scale.set(meniscusRadius, meniscusRadius, 1);
+    }
+
+    // Rotary temperature dial knob + red-orange ceramic heating coil + live °C (°F) LED ramp
+    const dialFrac = state.stage === 'evaporated' ? smooth01((pEvap - 0.16) / 0.16) : 0;
+    this.s9DialKnobGroup.rotation.x = -2.1 + dialFrac * 3.65;
+
+    const heatFrac = state.stage === 'evaporated' ? smooth01((pEvap - 0.2) / 0.18) : 0;
+    const liveTempC = Math.round(22 + (state.hotPlateTempCelsius - 22) * heatFrac);
+    const isHeating = heatFrac > 0.25;
+    this.s9HotPlateGlowMat.emissiveIntensity = 0.04 + heatFrac * (1.75 + Math.sin(t * 5) * 0.12);
+    this.s9StatusLedMat.color.setHex(isHeating ? 0xf97316 : 0x38bdf8);
+    this.s9StatusLedMat.emissive.setHex(isHeating ? 0xea580c : 0x0284c7);
+    this.s9StatusLedMat.emissiveIntensity = isHeating ? 1.35 : 0.55;
+
+    // Vigorous nucleate boiling bubbles inside flask while liquid boils on the 100°C hot plate
+    const isActivelyBoiling =
+      state.stage === 'evaporated' && pEvap > 0.28 && flaskFillFrac > 0.035;
+    this.s9BoilingBubbles.visible = isActivelyBoiling;
+    if (isActivelyBoiling) {
+      const maxBubbleRise = Math.max(0.006, currentLiquidH - 0.004);
+      for (let i = 0; i < 36; i++) {
+        const a = i * 2.39996 + t * 0.6;
+        const phase = (t * (1.9 + (i % 5) * 0.35) + i * 0.13) % 1;
+        const maxR = Math.max(0.018, 0.066 - phase * maxBubbleRise * 0.35);
+        const r = (((i * 19) % 100) / 100) * maxR;
+        const s = 0.45 + phase * 0.85;
+        this.dummy.position.set(
+          Math.cos(a) * r,
+          0.01 + phase * maxBubbleRise,
+          Math.sin(a) * r,
+        );
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar(s);
+        this.dummy.updateMatrix();
+        this.s9BoilingBubbles.setMatrixAt(i, this.dummy.matrix);
+      }
+      this.s9BoilingBubbles.instanceMatrix.needsUpdate = true;
+    }
+
+    // Invisible water-vapor zone directly above flask mouth (y = 0.32..0.44) + condensed mist higher up (y = 0.45..0.56)
+    const vaporActive = state.stage === 'evaporated' && pEvap > 0.3 && pEvap < 0.96;
+    this.s9VaporVision.visible = vaporActive && this.particleVisionEnabled;
+    if (this.s9VaporVision.visible) {
+      for (let i = 0; i < 36; i++) {
+        const phase = (t * 0.95 + i / 36) % 1;
+        const a = i * 1.9 + t * 1.2;
+        const r = 0.008 + phase * 0.045;
+        this.dummy.position.set(
+          -0.04 + Math.cos(a) * r,
+          0.318 + phase * 0.135,
+          0.46 + Math.sin(a) * r,
+        );
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar(0.85 + phase * 0.35);
+        this.dummy.updateMatrix();
+        this.s9VaporVision.setMatrixAt(i, this.dummy.matrix);
+      }
+      this.s9VaporVision.instanceMatrix.needsUpdate = true;
+    }
+
+    const mistIntensity =
+      state.stage === 'evaporated' && pEvap > 0.32
+        ? pEvap < 0.92
+          ? smooth01((pEvap - 0.32) / 0.15)
+          : Math.max(0.18, 1 - (pEvap - 0.92) * 8)
+        : 0;
+    this.s9UpperMist.visible = mistIntensity > 0.05;
+    if (this.s9UpperMist.visible) {
+      for (let i = 0; i < 24; i++) {
+        const phase = (t * 0.55 + i / 24) % 1;
+        const a = i * 2.4 + t * 0.45;
+        const r = (((i * 17) % 100) / 100) * (0.068 - phase * 0.042);
+        this.dummy.position.set(
+          -0.04 + Math.cos(a) * r,
+          0.448 + phase * 0.12,
+          0.46 + Math.sin(a) * r,
+        );
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar((0.6 + Math.sin(phase * Math.PI) * 0.65) * mistIntensity);
+        this.dummy.updateMatrix();
+        this.s9UpperMist.setMatrixAt(i, this.dummy.matrix);
+      }
+      this.s9UpperMist.instanceMatrix.needsUpdate = true;
+    }
+
+    // Condenser delivery droplets + rising pure distillate water in recovery beaker (z = +0.94)
+    const condenseFlowActive = state.stage === 'evaporated' && pEvap > 0.36 && pEvap < 0.96;
+    this.s9CondenserDrops.visible = condenseFlowActive;
+    if (condenseFlowActive) {
+      for (let i = 0; i < 10; i++) {
+        const u = (t * 0.85 + i / 10) % 1;
+        // Follow condenser delivery curve into distillate beaker
+        const z = 0.48 + u * 0.46;
+        const y =
+          u < 0.25
+            ? 0.585 + (u / 0.25) * 0.045
+            : 0.63 - ((u - 0.25) / 0.75) * 0.52;
+        this.dummy.position.set(-0.04, y, z);
+        this.dummy.rotation.set(0, 0, 0);
+        this.dummy.scale.setScalar(0.9);
+        this.dummy.updateMatrix();
+        this.s9CondenserDrops.setMatrixAt(i, this.dummy.matrix);
+      }
+      this.s9CondenserDrops.instanceMatrix.needsUpdate = true;
+    }
+
+    const distFrac =
+      state.condenserCapturedWaterGrams > 0.5
+        ? smooth01((pEvap - 0.38) / 0.56)
+        : 0;
+    this.s9CondenserWater.visible = distFrac > 0.02;
+    if (this.s9CondenserWater.visible) {
+      this.s9CondenserWater.scale.set(1, Math.max(0.004, 0.092 * distFrac), 1);
+    }
+
+    // Particle Vision dissolved salt ions inside Erlenmeyer filtrate (before crystallization completes)
+    const dissolvedSaltRemain =
+      state.mode === 'mode_b_salt_sand_water' &&
+      (state.stage === 'filtered' || (state.stage === 'evaporated' && flaskFillFrac > 0.08));
+    this.s9DishSaltVision.visible = this.particleVisionEnabled && dissolvedSaltRemain;
     if (this.s9DishSaltVision.visible) {
+      const hSpan = Math.max(0.01, currentLiquidH - 0.006);
       for (let i = 0; i < 80; i++) {
-        const ang = i * 2.3 + t * 0.9;
-        const r = 0.01 + ((i * 13) % 100) * 0.00085;
-        this.dummy.position.set(-0.05 + Math.cos(ang) * r, 0.125 + (i % 4) * 0.006, 0.46 + Math.sin(ang) * r);
+        const ang = i * 2.3 + t * 1.1;
+        const r = 0.008 + (((i * 13) % 100) / 100) * 0.048;
+        const y = 0.011 + ((i % 6) / 6) * hSpan;
+        this.dummy.position.set(Math.cos(ang) * r, y, Math.sin(ang) * r);
+        this.dummy.rotation.set(0, 0, 0);
         this.dummy.scale.setScalar(1);
         this.dummy.updateMatrix();
         this.s9DishSaltVision.setMatrixAt(i, this.dummy.matrix);
@@ -2563,59 +3590,42 @@ export class LabPropBuilder {
       this.s9DishSaltVision.instanceMatrix.needsUpdate = true;
     }
 
-    const isHot = state.hotPlateTempCelsius >= 90;
-    this.s9HotPlateGlowMat.emissiveIntensity = isHot ? 1.85 : 0.05;
-
-    const showSteam = isHot && evapPulse > 0;
-    this.s9BoilingBubbles.visible = showSteam;
-    this.s9VaporVision.visible = showSteam && this.particleVisionEnabled;
-    this.s9UpperMist.visible = showSteam;
-    if (showSteam) {
-      for (let i = 0; i < 28; i++) {
-        const a = i * 2.1;
-        const r = ((i * 17) % 100) * 0.00085;
-        this.dummy.position.set(-0.05 + Math.cos(a) * r, 0.12 + ((t * 0.3 + i * 0.08) % 0.04), 0.46 + Math.sin(a) * r);
-        this.dummy.scale.setScalar(1);
+    // Procedural nucleation & growth of 200 sparkling white cubic NaCl crystals across bottom of flask
+    const crystalGlobalFrac =
+      state.dishCrystallizedSaltGrams > 0.5
+        ? smooth01((pEvap - 0.5) / 0.46)
+        : 0;
+    this.s9DishSaltCrystals.visible = crystalGlobalFrac > 0.01;
+    if (this.s9DishSaltCrystals.visible) {
+      for (let i = 0; i < this.s9CrystalOffsets.length; i++) {
+        const c = this.s9CrystalOffsets[i]!;
+        const localGrowth = smooth01((crystalGlobalFrac * 1.35 - (1 - c.radialOrder) * 0.35));
+        this.dummy.position.set(c.x, c.y, c.z);
+        this.dummy.rotation.set(c.rx, c.ry, c.rz);
+        this.dummy.scale.setScalar(c.baseScale * localGrowth);
         this.dummy.updateMatrix();
-        this.s9BoilingBubbles.setMatrixAt(i, this.dummy.matrix);
+        this.s9DishSaltCrystals.setMatrixAt(i, this.dummy.matrix);
       }
-      this.s9BoilingBubbles.instanceMatrix.needsUpdate = true;
-      for (let i = 0; i < 36; i++) {
-        const a = i * 1.9 + t;
-        const r = ((i * 13) % 100) * 0.001;
-        this.dummy.position.set(-0.05 + Math.cos(a) * r, 0.18 + ((t * 0.28 + i * 0.07) % 0.26), 0.46 + Math.sin(a) * r);
-        this.dummy.scale.setScalar(1);
-        this.dummy.updateMatrix();
-        this.s9VaporVision.setMatrixAt(i, this.dummy.matrix);
-      }
-      this.s9VaporVision.instanceMatrix.needsUpdate = true;
-      for (let i = 0; i < 22; i++) {
-        const a = i * 2.5 + t * 0.5;
-        const r = ((i * 15) % 100) * 0.001;
-        this.dummy.position.set(-0.05 + Math.cos(a) * r, 0.34 + ((t * 0.14 + i * 0.06) % 0.14), 0.46 + Math.sin(a) * r);
-        this.dummy.scale.setScalar(1);
-        this.dummy.updateMatrix();
-        this.s9UpperMist.setMatrixAt(i, this.dummy.matrix);
-      }
-      this.s9UpperMist.instanceMatrix.needsUpdate = true;
+      this.s9DishSaltCrystals.instanceMatrix.needsUpdate = true;
     }
 
-    const sig = `${state.hotPlateTempCelsius}_${state.stage}`;
+    // Update digital ceramic hot plate LED display (°C and °F per Grade 5 rule)
+    const sig = `${liveTempC}_${state.stage}_${isHeating ? 1 : 0}`;
     if (sig !== this.lastS9Sig) {
       this.lastS9Sig = sig;
       const ctx = this.s9HotPlateCanvas.getContext('2d');
       if (ctx) {
-        ctx.fillStyle = '#071525';
+        ctx.fillStyle = '#060d16';
         ctx.fillRect(0, 0, 256, 96);
-        ctx.strokeStyle = isHot ? '#f97316' : '#38bdf8';
+        ctx.strokeStyle = isHeating ? '#f97316' : '#38bdf8';
         ctx.lineWidth = 4;
         ctx.strokeRect(3, 3, 250, 90);
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = 'bold 16px system-ui, sans-serif';
-        ctx.fillText('HOT PLATE', 14, 28);
-        ctx.fillStyle = isHot ? '#fb923c' : '#38bdf8';
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 14px system-ui, sans-serif';
+        ctx.fillText(isHeating ? 'CERAMIC HOT PLATE • BOIL' : 'CERAMIC HOT PLATE • OFF', 12, 26);
+        ctx.fillStyle = isHeating ? '#fb923c' : '#38bdf8';
         ctx.font = 'bold 26px monospace';
-        ctx.fillText(formatGrade5Temperature(state.hotPlateTempCelsius), 14, 72);
+        ctx.fillText(formatGrade5Temperature(liveTempC), 12, 70);
         this.s9HotPlateTex.needsUpdate = true;
       }
     }

@@ -218,45 +218,45 @@ export class MaterialFactory {
     pmrem.compileEquirectangularShader();
 
     const envScene = new THREE.Scene();
-    envScene.background = new THREE.Color(0x0b111b);
+    envScene.background = new THREE.Color(0x0d131a);
 
-    // High-contrast studio dome enclosure
+    // Deep dark slate studio dome enclosure (prevents ambient milky bounce)
     const domeGeo = new THREE.SphereGeometry(24, 24, 16);
     const domeMat = new THREE.MeshBasicMaterial({
-      color: 0x152030,
+      color: 0x0d131a,
       side: THREE.BackSide,
     });
     envScene.add(new THREE.Mesh(domeGeo, domeMat));
 
-    // Crisp overhead studio softbox banks for sharp glassware & metal specular highlights
-    const softboxGeo = new THREE.PlaneGeometry(11, 3.6);
+    // Narrow high-contrast studio specular light strips for sharp glass & metal rim highlights
+    const softboxGeo = new THREE.PlaneGeometry(9.2, 1.35);
     const softboxMatDaylight = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(2.5, 2.45, 2.3),
+      color: new THREE.Color(1.55, 1.5, 1.4),
       side: THREE.DoubleSide,
     });
     const softboxMatSky = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(1.9, 2.25, 2.65),
+      color: new THREE.Color(1.25, 1.45, 1.65),
       side: THREE.DoubleSide,
     });
 
     const topPanel1 = new THREE.Mesh(softboxGeo, softboxMatDaylight);
-    topPanel1.position.set(-5.5, 11, 0);
+    topPanel1.position.set(-5.5, 11.5, 0);
     topPanel1.rotation.x = Math.PI / 2;
     envScene.add(topPanel1);
 
     const topPanel2 = new THREE.Mesh(softboxGeo, softboxMatSky);
-    topPanel2.position.set(5.5, 11, 0);
+    topPanel2.position.set(5.5, 11.5, 0);
     topPanel2.rotation.x = Math.PI / 2;
     envScene.add(topPanel2);
 
-    // Accent studio rim light strips along East & West walls
-    const stripGeo = new THREE.PlaneGeometry(1.6, 8);
+    // Subtle studio rim light strips along East & West walls
+    const stripGeo = new THREE.PlaneGeometry(0.9, 6.5);
     const skyWindowMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(1.2, 1.9, 2.4),
+      color: new THREE.Color(0.85, 1.25, 1.55),
       side: THREE.DoubleSide,
     });
     const warmWindowMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(2.2, 1.95, 1.55),
+      color: new THREE.Color(1.35, 1.2, 0.95),
       side: THREE.DoubleSide,
     });
 
@@ -270,15 +270,15 @@ export class MaterialFactory {
     rightRim.lookAt(0, 2, 0);
     envScene.add(rightRim);
 
-    // Dark charcoal slate lab floor bounce
+    // Deep dark slate lab floor
     const floorGeo = new THREE.PlaneGeometry(32, 32);
-    const floorMat = new THREE.MeshBasicMaterial({ color: 0x1a2230, side: THREE.DoubleSide });
+    const floorMat = new THREE.MeshBasicMaterial({ color: 0x0b1017, side: THREE.DoubleSide });
     const floorMesh = new THREE.Mesh(floorGeo, floorMat);
     floorMesh.position.y = -4;
     floorMesh.rotation.x = -Math.PI / 2;
     envScene.add(floorMesh);
 
-    const renderTarget = pmrem.fromScene(envScene, 0.04);
+    const renderTarget = pmrem.fromScene(envScene, 0.03);
     this.envTarget = renderTarget;
     this.envTexture = renderTarget.texture;
 
@@ -385,18 +385,18 @@ export class MaterialFactory {
 
     let mat: THREE.Material;
     if (tierCfg.physicalRefractiveGlass) {
+      // Crystal-clear specular borosilicate glass (no blurry multi-pass transmission washout)
       mat = new THREE.MeshPhysicalMaterial({
         color: tintHex,
-        transmission: 0.94,
-        ior: 1.47, // Borosilicate lab glass IOR
-        thickness: 0.09,
-        roughness: 0.05,
-        metalness: 0.0,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.04,
-        envMapIntensity: 1.45,
         transparent: true,
-        opacity: 1.0,
+        opacity: 0.17,
+        ior: 1.47,
+        reflectivity: 0.94,
+        roughness: 0.03,
+        metalness: 0.02,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.025,
+        envMapIntensity: 1.15,
         depthWrite: false,
         side: THREE.DoubleSide,
       });
@@ -404,25 +404,25 @@ export class MaterialFactory {
       mat = new THREE.MeshPhysicalMaterial({
         color: tintHex,
         transparent: true,
-        opacity: 0.28,
-        roughness: 0.06,
-        metalness: 0.05,
+        opacity: 0.21,
+        roughness: 0.05,
+        metalness: 0.04,
         clearcoat: 1.0,
-        clearcoatRoughness: 0.05,
-        reflectivity: 0.95,
-        envMapIntensity: 1.25,
+        clearcoatRoughness: 0.04,
+        reflectivity: 0.92,
+        envMapIntensity: 1.0,
         depthWrite: false,
         side: THREE.DoubleSide,
       });
     } else {
-      // Classroom Safe: zero multi-pass transmission overhead, crisp Fresnel specular transparency
+      // Classroom Safe: crisp Fresnel specular transparency
       mat = new THREE.MeshStandardMaterial({
         color: tintHex,
         transparent: true,
-        opacity: 0.32,
-        roughness: 0.12,
-        metalness: 0.15,
-        envMapIntensity: 1.0,
+        opacity: 0.24,
+        roughness: 0.1,
+        metalness: 0.12,
+        envMapIntensity: 0.85,
         depthWrite: false,
         side: THREE.DoubleSide,
       });
@@ -453,31 +453,32 @@ export class MaterialFactory {
         mat.metalness = 0.92;
         mat.roughness = 0.34;
         mat.normalScale.set(0.45, 0.45);
-        mat.envMapIntensity = 1.25;
+        mat.envMapIntensity = 1.05;
         break;
       case 'anodizedDark':
-        mat.metalness = 0.78;
+        mat.metalness = 0.72;
         mat.roughness = 0.48;
         mat.normalScale.set(0.35, 0.35);
-        mat.envMapIntensity = 1.05;
+        mat.envMapIntensity = 0.85;
         break;
       case 'copperCoil':
         mat.metalness = 0.94;
         mat.roughness = 0.28;
         mat.normalScale.set(0.9, 0.9);
-        mat.envMapIntensity = 1.35;
+        mat.envMapIntensity = 1.15;
         break;
       case 'brassCollar':
         mat.metalness = 0.88;
         mat.roughness = 0.32;
         mat.normalScale.set(0.4, 0.4);
-        mat.envMapIntensity = 1.25;
+        mat.envMapIntensity = 1.05;
         break;
       case 'labBenchEpoxy':
-        mat.metalness = 0.08;
-        mat.roughness = 0.42;
-        mat.normalScale.set(0.28, 0.28);
-        mat.envMapIntensity = 0.95;
+        mat.color.setHex(0xffffff);
+        mat.metalness = 0.06;
+        mat.roughness = 0.45;
+        mat.normalScale.set(0.24, 0.24);
+        mat.envMapIntensity = 0.55;
         break;
       case 'sieveWireMesh':
         mat.metalness = 0.85;
@@ -490,17 +491,18 @@ export class MaterialFactory {
         mat.metalness = 0.02;
         mat.roughness = 0.16;
         mat.normalScale.set(0.18, 0.18);
-        mat.envMapIntensity = 1.1;
+        mat.envMapIntensity = 0.85;
         break;
       case 'filterPaper':
         mat.metalness = 0.0;
         mat.roughness = 0.92;
         mat.normalScale.set(0.55, 0.55);
+        mat.envMapIntensity = 0.35;
         mat.side = THREE.DoubleSide;
         break;
       case 'mineRockWall':
         mat.metalness = 0.18;
-        mat.roughness = 0.58; // Damp subterranean mineral sheen
+        mat.roughness = 0.58;
         mat.normalScale.set(1.25, 1.25);
         mat.emissive = new THREE.Color(0x0ea5e9);
         mat.emissiveIntensity = 0.95;
@@ -510,7 +512,7 @@ export class MaterialFactory {
         mat.metalness = 0.82;
         mat.roughness = 0.44;
         mat.normalScale.set(0.6, 0.6);
-        mat.envMapIntensity = 1.15;
+        mat.envMapIntensity = 0.95;
         break;
       case 'heatingElement':
         mat.metalness = 0.25;
@@ -520,22 +522,22 @@ export class MaterialFactory {
         mat.emissiveIntensity = 0.05;
         break;
       case 'terrazzoFloor':
-        mat.metalness = 0.14;
-        mat.roughness = 0.28;
+        mat.metalness = 0.12;
+        mat.roughness = 0.34;
         mat.normalScale.set(0.24, 0.24);
-        mat.envMapIntensity = 1.05;
+        mat.envMapIntensity = 0.65;
         break;
       case 'labWallPanel':
-        mat.metalness = 0.08;
-        mat.roughness = 0.72;
+        mat.metalness = 0.06;
+        mat.roughness = 0.76;
         mat.normalScale.set(0.38, 0.38);
-        mat.envMapIntensity = 0.65;
+        mat.envMapIntensity = 0.45;
         break;
       case 'skylightGlass':
         mat.metalness = 0.0;
-        mat.roughness = 0.2;
-        mat.emissive = new THREE.Color(0xe2e8f0);
-        mat.emissiveIntensity = 0.55;
+        mat.roughness = 0.25;
+        mat.emissive = new THREE.Color(0xcbd5e1);
+        mat.emissiveIntensity = 0.24;
         break;
       case 'oakWoodTrim':
         mat.metalness = 0.02;
@@ -693,16 +695,16 @@ export class MaterialFactory {
           metal = 230;
         } else if (preset === 'labBenchEpoxy') {
           needsMetalMap = true;
-          normalStrength = 1.1;
-          const speckle = fbmTileable(u, v, { seed: 71, octaves: 4, baseFreq: 20 });
-          const glint = hash2D(x, y, size, 88) > 0.992 ? 0.35 : 0;
-          h = speckle * 0.7 + glint;
-          const base = 22 + speckle * 18 + glint * 75;
-          r = base * 0.85;
-          g = base * 1.0;
-          b = base * 1.18;
-          rough = 88 + speckle * 62 - glint * 60;
-          metal = glint > 0 ? 110 : 18;
+          normalStrength = 0.85;
+          const speckle = fbmTileable(u, v, { seed: 71, octaves: 4, baseFreq: 22 });
+          const glint = hash2D(x, y, size, 88) > 0.994 ? 0.25 : 0;
+          h = speckle * 0.65 + glint;
+          const delta = (speckle - 0.5) * 10 + glint * 36;
+          r = 28 + delta;
+          g = 36 + delta;
+          b = 46 + delta;
+          rough = 108 + speckle * 30 - glint * 35;
+          metal = glint > 0 ? 64 : 14;
         } else if (preset === 'sieveWireMesh') {
           needsMetalMap = true;
           needsAlphaMap = true;

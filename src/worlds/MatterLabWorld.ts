@@ -1,15 +1,11 @@
 /**
  * MATTERVERSE: 10-Station Two-Wing Grade 5 Matter & Solutions Laboratory
- * Orchestrates the Three.js sunlit research hall, PBR/IBL pipeline, UnrealBloomPass,
+ * Orchestrates the high-contrast Three.js research hall, direct ACESFilmic PBR/IBL pipeline,
  * GraphicsQualityTier scaling, LabPropBuilder (Stations 1–10), Two-State PlayerController
  * + voluntary ATOM-5 companion, SoundEngine, GameHUD, LabDataSheet, TeacherHUD, & MatterEngine.
  */
 
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { SoundEngine } from '../audio/SoundEngine';
 import {
   DEFAULT_GRAPHICS_TIER,
@@ -46,8 +42,6 @@ export class MatterLabWorld {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
-  private readonly composer: EffectComposer;
-  private readonly bloomPass: UnrealBloomPass;
   private readonly materials: MaterialFactory;
   private readonly props: LabPropBuilder;
   private readonly player: PlayerController;
@@ -84,7 +78,7 @@ export class MatterLabWorld {
     const width = window.innerWidth || 1280;
     const height = window.innerHeight || 720;
 
-    // 1. Renderer setup with ACES Filmic Tone Mapping (High-Contrast Studio Exposure)
+    // 1. Direct WebGLRenderer setup (ZERO EffectComposer/Bloom haze, crisp hardware MSAA)
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
@@ -92,22 +86,26 @@ export class MatterLabWorld {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.toneMappingExposure = 0.85;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.camera = new THREE.PerspectiveCamera(50, width / height, 0.08, 75);
-    this.scene.background = new THREE.Color(0x0b1019);
     this.scene.fog = null;
+    this.scene.background = new THREE.Color(0x0d131a);
 
-    // 2. Procedural PBR Materials & High-Contrast Studio Hall IBL Dome
+    // 2. Procedural PBR Materials & Controlled Studio IBL (environmentIntensity = 0.35 for rich shadows)
     this.materials = new MaterialFactory(this.qualityTier);
     this.scene.environment = this.materials.buildLabEnvironment(this.renderer);
+    this.scene.environmentIntensity = 0.35;
 
-    // 3. Crisp High-Contrast Studio Lighting Rig (Key Light + Cool Fill; SpotLights per bench)
-    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.55);
+    // 3. Low-Fill Studio Global Lighting (deep shadows; crisp SpotLights illuminate each workbench)
+    const ambient = new THREE.AmbientLight(0xffffff, 0.12);
+    this.scene.add(ambient);
+
+    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x0d131a, 0.3);
     this.scene.add(hemi);
 
-    this.keyLight = new THREE.DirectionalLight(0xfff7ed, 1.65);
+    this.keyLight = new THREE.DirectionalLight(0xfff7ed, 0.45);
     this.keyLight.position.set(5.5, 11.5, 6.5);
     this.keyLight.shadow.bias = -0.0004;
     this.keyLight.shadow.camera.near = 1.0;
@@ -118,28 +116,9 @@ export class MatterLabWorld {
     this.keyLight.shadow.camera.bottom = -13;
     this.scene.add(this.keyLight);
 
-    const wingAFill = new THREE.PointLight(0x7dd3fc, 1.15, 18, 1.6);
-    wingAFill.position.set(-7.5, 4.4, 0);
-    const wingBFill = new THREE.PointLight(0x6ee7b7, 1.15, 18, 1.6);
-    wingBFill.position.set(7.5, 4.4, 0);
-    this.scene.add(wingAFill, wingBFill);
-
     // 4. Parametric 10-Station Research Hall Scene
     this.props = new LabPropBuilder(this.materials);
     this.scene.add(this.props.root);
-
-    // 5. Post-Processing Composer
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    const tierCfg = GRAPHICS_TIER_PRESETS[this.qualityTier];
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
-      tierCfg.bloomStrength,
-      tierCfg.bloomRadius,
-      tierCfg.bloomThreshold,
-    );
-    this.composer.addPass(this.bloomPass);
-    this.composer.addPass(new OutputPass());
 
     // 6. Two-State Explorer & ATOM-5 Companion Controller
     this.player = new PlayerController({
@@ -449,7 +428,6 @@ export class MatterLabWorld {
     this.dataSheet.dispose();
     this.teacherHud.dispose();
     this.sound.dispose();
-    this.composer.dispose();
     this.renderer.dispose();
   }
 
@@ -833,14 +811,6 @@ export class MatterLabWorld {
       }
     }
 
-    this.bloomPass.strength = cfg.bloomStrength;
-    this.bloomPass.radius = cfg.bloomRadius;
-    this.bloomPass.threshold = cfg.bloomThreshold;
-
-    this.composer.setPixelRatio(dpr);
-    this.composer.setSize(width, height);
-    this.bloomPass.setSize(width, height);
-
     this.materials.applyQualityTier(tier, (oldMat, newMat) => {
       this.props.onGlassMaterialReplaced(oldMat, newMat);
     });
@@ -859,9 +829,6 @@ export class MatterLabWorld {
 
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(width, height, false);
-    this.composer.setPixelRatio(dpr);
-    this.composer.setSize(width, height);
-    this.bloomPass.setSize(width, height);
   }
 
   private onGlobalKeyDown(e: KeyboardEvent): void {
@@ -959,8 +926,8 @@ export class MatterLabWorld {
       this.anims.tweezersPulse = Math.max(0, this.anims.tweezersPulse - dt * 1.35);
       this.anims.magnetSweepPulse = Math.max(0, this.anims.magnetSweepPulse - dt * 0.9);
       this.anims.sieveShakePulse = Math.max(0, this.anims.sieveShakePulse - dt * 0.85);
-      this.anims.filterPourPulse = Math.max(0, this.anims.filterPourPulse - dt * 0.85);
-      this.anims.evaporatePulse = Math.max(0, this.anims.evaporatePulse - dt * 0.25);
+      this.anims.filterPourPulse = Math.max(0, this.anims.filterPourPulse - dt * 0.3);
+      this.anims.evaporatePulse = Math.max(0, this.anims.evaporatePulse - dt * 0.19);
 
       const st10Before = this.engine.getStation10State();
       const raceTick = this.engine.tickStation10Stopwatch(dt);
@@ -998,10 +965,6 @@ export class MatterLabWorld {
       simTimeSeconds: this.simTimeSeconds,
     });
 
-    if (GRAPHICS_TIER_PRESETS[this.qualityTier].bloomEnabled) {
-      this.composer.render();
-    } else {
-      this.renderer.render(this.scene, this.camera);
-    }
+    this.renderer.render(this.scene, this.camera);
   }
 }

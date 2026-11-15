@@ -34,6 +34,10 @@ export interface PlayerControllerOptions {
     stationId: LabStationId | null,
   ) => void;
   readonly onCameraModeChange?: (mode: CameraViewMode) => void;
+  readonly onHoverTargetChange?: (
+    info: { label: string; clientX: number; clientY: number; mesh: THREE.Object3D | null } | null,
+  ) => void;
+  readonly onApparatusClick?: (stationId: LabStationId, action: string) => void;
 }
 
 export class PlayerController {
@@ -54,6 +58,10 @@ export class PlayerController {
     stationId: LabStationId | null,
   ) => void;
   private readonly onCameraModeChange?: (mode: CameraViewMode) => void;
+  private readonly onHoverTargetChange?: (
+    info: { label: string; clientX: number; clientY: number; mesh: THREE.Object3D | null } | null,
+  ) => void;
+  private readonly onApparatusClick?: (stationId: LabStationId, action: string) => void;
 
   // Navigation & Camera State
   private cameraViewMode: CameraViewMode = 'third_person';
@@ -123,6 +131,8 @@ export class PlayerController {
     if (opts.onAtom5Clicked) this.onAtom5Clicked = opts.onAtom5Clicked;
     if (opts.onNavigationModeChange) this.onNavigationModeChange = opts.onNavigationModeChange;
     if (opts.onCameraModeChange) this.onCameraModeChange = opts.onCameraModeChange;
+    if (opts.onHoverTargetChange) this.onHoverTargetChange = opts.onHoverTargetChange;
+    if (opts.onApparatusClick) this.onApparatusClick = opts.onApparatusClick;
 
     this.buildExplorerAvatar(opts.materials);
     this.buildAtom5Companion(opts.materials);
@@ -459,6 +469,8 @@ export class PlayerController {
     this.orbitPolar = meta.defaultOrbitPolar;
     this.orbitRadius = meta.defaultOrbitRadius;
     this.explorerGroup.visible = false;
+    this.onHoverTargetChange?.(null);
+    this.domElement.style.cursor = 'grab';
     this.onNavigationModeChange?.('station_focus', stationId);
     this.onStationSelected?.(stationId);
   }
@@ -479,10 +491,89 @@ export class PlayerController {
     this.pointerMovedDist = 0;
     this.lastPointerX = e.clientX;
     this.lastPointerY = e.clientY;
+    this.onHoverTargetChange?.(null);
+  }
+
+  private findInteractiveHit(clientX: number, clientY: number): {
+    atom5: boolean;
+    stationId: LabStationId | null;
+    action: string | null;
+    label: string;
+    mesh: THREE.Object3D;
+  } | null {
+    const rect = this.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+
+    const atomHits = this.raycaster.intersectObject(this.atom5Group, true);
+    if (atomHits.length > 0) {
+      return {
+        atom5: true,
+        stationId: null,
+        action: null,
+        label: 'ATOM-5 Helper — Click for lab tip',
+        mesh: this.atom5Group,
+      };
+    }
+
+    const hits = this.raycaster.intersectObjects([...this.interactiveMeshes], true);
+    for (const hit of hits) {
+      let cur: THREE.Object3D | null = hit.object;
+      while (cur) {
+        const stationId = cur.userData['stationId'] as StationFocusId | undefined;
+        const action = cur.userData['stationAction'] as string | undefined;
+        const label = cur.userData['hoverLabel'] as string | undefined;
+
+        if (this.navMode === 'station_focus') {
+          if (stationId && stationId === this.focusedStation && action) {
+            return {
+              atom5: false,
+              stationId,
+              action,
+              label: label ?? 'Click to use equipment',
+              mesh: cur,
+            };
+          }
+        } else if (stationId && stationId !== 'overview') {
+          return {
+            atom5: false,
+            stationId,
+            action: null,
+            label: label ?? `${this.stations[stationId].label} — Click to walk here`,
+            mesh: cur,
+          };
+        }
+        cur = cur.parent;
+      }
+    }
+
+    return null;
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.pointerDown) return;
+    if (!this.pointerDown) {
+      if (e.target !== this.domElement) {
+        this.onHoverTargetChange?.(null);
+        return;
+      }
+      const found = this.findInteractiveHit(e.clientX, e.clientY);
+      if (found) {
+        this.domElement.style.cursor = 'pointer';
+        this.onHoverTargetChange?.({
+          label: found.label,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          mesh: found.mesh,
+        });
+      } else {
+        this.domElement.style.cursor = 'grab';
+        this.onHoverTargetChange?.(null);
+      }
+      return;
+    }
+
     const dx = e.clientX - this.lastPointerX;
     const dy = e.clientY - this.lastPointerY;
     this.lastPointerX = e.clientX;
@@ -507,31 +598,18 @@ export class PlayerController {
     this.pointerDown = false;
 
     if (e.button === 0 && this.pointerMovedDist < 7) {
-      const rect = this.domElement.getBoundingClientRect();
-      this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      this.pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      this.raycaster.setFromCamera(this.pointerNdc, this.camera);
-
-      // 1. Check voluntary ATOM-5 click first
-      const atomHits = this.raycaster.intersectObject(this.atom5Group, true);
-      if (atomHits.length > 0) {
+      const found = this.findInteractiveHit(e.clientX, e.clientY);
+      if (!found) return;
+      if (found.atom5) {
         this.onAtom5Clicked?.();
         return;
       }
-
-      // 2. Check station workbenches / overhead placards
-      const hits = this.raycaster.intersectObjects([...this.interactiveMeshes], true);
-      const firstHit = hits[0];
-      if (firstHit) {
-        let cur: THREE.Object3D | null = firstHit.object;
-        while (cur) {
-          const stationId = cur.userData['stationId'] as StationFocusId | undefined;
-          if (stationId && stationId !== 'overview') {
-            this.walkToAndFocusStation(stationId);
-            break;
-          }
-          cur = cur.parent;
+      if (this.navMode === 'station_focus') {
+        if (found.stationId && found.action) {
+          this.onApparatusClick?.(found.stationId, found.action);
         }
+      } else if (found.stationId) {
+        this.walkToAndFocusStation(found.stationId);
       }
     }
   }

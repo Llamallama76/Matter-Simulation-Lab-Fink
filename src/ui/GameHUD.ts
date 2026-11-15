@@ -103,6 +103,7 @@ export interface GameHudCallbacks {
   ) => void;
   readonly onStation10StartRace: () => void;
   readonly onStation10ResetRace: () => void;
+  readonly onDemoStep: (stationId: LabStationId) => void;
 
   readonly onUiClick: () => void;
 }
@@ -137,6 +138,7 @@ export class GameHUD {
   private observationStrip!: HTMLDivElement;
   private bottomDock!: HTMLDivElement;
   private atom5Popover!: HTMLDivElement;
+  private hoverTagEl!: HTMLDivElement;
 
   private stationSelectEl!: HTMLSelectElement;
   private freezePillEl!: HTMLSpanElement;
@@ -164,6 +166,21 @@ export class GameHUD {
     this.buildDom(parent);
   }
 
+  public setHoverHint(info: { label: string; clientX: number; clientY: number } | null): void {
+    if (!info || this.lastSyncedState?.cleanView) {
+      this.hoverTagEl.style.display = 'none';
+      return;
+    }
+    this.hoverTagEl.textContent = info.label;
+    this.hoverTagEl.style.display = 'block';
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 720;
+    const x = Math.min(vw - 260, Math.max(12, info.clientX + 14));
+    const y = Math.min(vh - 46, Math.max(12, info.clientY - 34));
+    this.hoverTagEl.style.left = `${x}px`;
+    this.hoverTagEl.style.top = `${y}px`;
+  }
+
   public syncState(state: GameHudSyncState): void {
     this.lastSyncedState = state;
     this.station2Tool = state.station2.activeTool;
@@ -178,6 +195,7 @@ export class GameHUD {
       this.guideCard.style.display = 'none';
       this.observationStrip.style.display = 'none';
       this.atom5Popover.style.display = 'none';
+      this.hoverTagEl.style.display = 'none';
       return;
     }
 
@@ -212,7 +230,7 @@ export class GameHUD {
 
     // 3. State B Corner Guide Card & Observation Strip
     if (state.navMode === 'station_focus' && state.focusedStation) {
-      this.renderGuideCard(state.focusedStation);
+      this.renderGuideCard(state, state.focusedStation);
       this.renderObservationStrip();
     } else {
       this.guideCard.style.display = 'none';
@@ -257,6 +275,7 @@ export class GameHUD {
     this.observationStrip.remove();
     this.bottomDock.remove();
     this.atom5Popover.remove();
+    this.hoverTagEl.remove();
   }
 
   // ============================================================================
@@ -265,7 +284,7 @@ export class GameHUD {
 
   private verifyGrade5Compliance(): void {
     const sampleStaticUi =
-      'MATTERVERSE 10-Station Grade 5 Matter Lab Data Sheet Particle Vision Hide HUD Show HUD Turn Left Turn Right Step Back to Lab Orbit Left Orbit Right Copper Penny Steel Nail Mass Volume Displaced Solid Liquid Gas Dissolving Race Beaker Filter Evaporate';
+      'MATTERVERSE 10-Station Grade 5 Matter Lab Data Sheet Particle Vision Hide HUD Show HUD Turn Left Turn Right Step Back to Lab Orbit Left Orbit Right Copper Penny Steel Nail Mass Volume Displaced Solid Liquid Gas Dissolving Race Beaker Filter Evaporate Demo Step Inspect materials Toggle magnifier Sweep magnet Release filings Pour sieve Test in water Change one condition';
     const violations = validateGrade5Copy(sampleStaticUi);
     if (violations.length > 0) {
       throw new Error(`GameHUD Grade 5 compliance violation: ${violations.join(', ')}`);
@@ -463,6 +482,24 @@ export class GameHUD {
       overflow-x: auto;
     `;
 
+    // 7. Floating 3D Hover Cue Tag
+    this.hoverTagEl = document.createElement('div');
+    this.hoverTagEl.style.cssText = `
+      position: fixed;
+      display: none;
+      pointer-events: none;
+      padding: 5px 10px;
+      border-radius: 8px;
+      background: rgba(8, 15, 29, 0.94);
+      border: 1px solid #fbbf24;
+      color: #fef3c7;
+      font-weight: 700;
+      font-size: 0.78em;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+      white-space: nowrap;
+      z-index: 45;
+    `;
+
     parent.append(
       this.topBar,
       this.cleanViewToggleBtn,
@@ -470,17 +507,104 @@ export class GameHUD {
       this.atom5Popover,
       this.observationStrip,
       this.bottomDock,
+      this.hoverTagEl,
     );
   }
 
-  private renderGuideCard(stationId: LabStationId): void {
-    const sig = `${stationId}_${this.guideMinimized}`;
+  private getChecklistSteps(
+    state: GameHudSyncState,
+    stationId: LabStationId,
+  ): Array<{ label: string; done: boolean }> {
+    switch (stationId) {
+      case 'station_1_luster_texture': {
+        const count = Object.values(state.station1.inspectedSpecimens).filter(Boolean).length;
+        return [
+          { label: 'Click 3 samples on the velvet tray', done: count >= 3 },
+          { label: 'Turn on the magnifying lens', done: state.station1.magnifierActive || count >= 5 },
+          { label: 'Inspect all 7 materials', done: count >= 7 },
+        ];
+      }
+      case 'station_2_hardness_scratch': {
+        const recs = Object.values(state.station2.scratchRecords);
+        return [
+          { label: 'Pick Copper Penny tool', done: state.station2.activeTool === 'copper_penny' || recs.some((r) => r.testedWithPenny) },
+          { label: 'Scratch a rock or glass sample', done: recs.some((r) => r.testedWithPenny) },
+          { label: 'Compare with the Steel Nail', done: recs.some((r) => r.testedWithNail) },
+        ];
+      }
+      case 'station_3_magnetism_wafting':
+        return [
+          { label: 'Touch magnet to nail & paperclip', done: state.station3.magnetTested.iron_nail && state.station3.magnetTested.steel_paperclip },
+          { label: 'Test foil, copper & plastic', done: state.station3.magnetTested.aluminum_foil && state.station3.magnetTested.copper_wire },
+          { label: 'Safely wave hand over a jar', done: Object.values(state.station3.waftedJars).some(Boolean) },
+        ];
+      case 'station_4_mass_volume':
+        return [
+          { label: 'Weigh an object on the balance', done: Object.values(state.station4.weighedObjects).some(Boolean) },
+          { label: 'Submerge in graduated cylinder', done: Object.values(state.station4.submergedObjects).some(Boolean) },
+          { label: 'Test all 3 objects cleanly', done: Object.values(state.station4.weighedObjects).every(Boolean) && Object.values(state.station4.submergedObjects).every(Boolean) },
+        ];
+      case 'station_5_thermal_states':
+        return [
+          { label: 'Cool to Ice (-8°C / 18°F)', done: state.station5.observedSolid },
+          { label: 'Melt into Liquid (22°C / 72°F)', done: state.station5.observedLiquid },
+          { label: 'Boil to Gas (100°C / 212°F)', done: state.station5.observedGasBoiling },
+        ];
+      case 'station_6_tweezers_sorting':
+        return [
+          { label: 'Use tweezers to pick up a piece', done: state.station6.unsortedCount < 16 },
+          { label: 'Sort at least 8 items into cups', done: state.station6.unsortedCount <= 8 },
+          { label: 'Sort all 16 items by look', done: state.station6.allSorted },
+        ];
+      case 'station_7_iron_sand_magnet':
+        return [
+          { label: 'Sweep sleeved magnet over tray', done: state.station7.ironOnMagnetGrams > 0.1 || state.station7.isSeparatedPure },
+          { label: 'Slide core up over recovery dish', done: state.station7.isSeparatedPure },
+          { label: 'Check pure sand and iron remain', done: state.station7.isSeparatedPure },
+        ];
+      case 'station_8_sand_gravel_sieve':
+        return [
+          { label: 'Pour mixture into 2.0 mm sieve', done: state.station8.sieveShaken },
+          { label: 'Shake fine sand into catch pan', done: state.station8.fineSandInCatchPanGrams > 0.5 },
+          { label: 'Inspect gravel left on wire mesh', done: state.station8.isSeparatedPure },
+        ];
+      case 'station_9_filtration_evaporation':
+        return [
+          { label: 'Pick Mode A or Mode B mixture', done: state.station9.stage !== 'beaker_ready' || state.station9.mode === 'mode_b_salt_sand_water' },
+          { label: 'Pour through pleated filter paper', done: state.station9.stage === 'filtered' || state.station9.stage === 'evaporated' },
+          { label: 'Boil at 100°C (212°F) to recover salt', done: state.station9.stage === 'evaporated' },
+        ];
+      case 'station_10_solutions_dissolving':
+        return [
+          { label: 'Test Salt, Sugar, Sand & Pepper', done: Object.values(state.station10.solubilityBeakers).every((b) => b.tested) },
+          { label: 'Change ONE condition for Race', done: state.station10.fairTest.isControlledFairTest },
+          { label: 'Time Beaker A vs B dissolving race', done: state.station10.latestRaceSummary !== null },
+        ];
+    }
+  }
+
+  private renderGuideCard(state: GameHudSyncState, stationId: LabStationId): void {
+    const steps = this.getChecklistSteps(state, stationId);
+    const stepBits = steps.map((s) => (s.done ? '1' : '0')).join('');
+    const sig = `${stationId}_${this.guideMinimized}_${stepBits}`;
     if (sig === this.lastGuideSignature && this.guideCard.style.display === 'block') return;
     this.lastGuideSignature = sig;
 
     const desc = LAB_STATION_CATALOG[stationId];
     this.guideCard.style.display = 'block';
     const accent = desc.wing === 'wing_a_properties' ? '#38bdf8' : '#34d399';
+
+    const checklistHtml = steps
+      .map(
+        (step, idx) => `
+      <div style="display:flex; align-items:center; gap:6px; margin-top:4px; font-size:0.76em; color:${step.done ? '#6ee7b7' : '#e2e8f0'};">
+        <span style="display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; border-radius:999px; font-weight:800; font-size:0.85em; flex-shrink:0; background:${step.done ? 'rgba(16,185,129,0.28)' : 'rgba(30,41,59,0.9)'}; border:1px solid ${step.done ? '#34d399' : 'rgba(148,163,184,0.45)'}; color:${step.done ? '#6ee7b7' : '#94a3b8'};">
+          ${step.done ? '&#10003;' : idx + 1}
+        </span>
+        <span style="text-decoration:${step.done ? 'line-through' : 'none'}; opacity:${step.done ? 0.85 : 1};">${step.label}</span>
+      </div>`,
+      )
+      .join('');
 
     this.guideCard.innerHTML = `
       <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
@@ -492,27 +616,34 @@ export class GameHUD {
       ${
         this.guideMinimized
           ? ''
-          : `<div style="margin-top:6px; font-size:0.78em; color:#e2e8f0; line-height:1.38;">
-              <div>${desc.compactGuideLines[0]}</div>
-              <div style="color:#94a3b8; margin-top:2px;">${desc.compactGuideLines[1]}</div>
-            </div>`
+          : `<div style="margin-top:5px; font-size:0.76em; color:#94a3b8; line-height:1.35;">
+              ${desc.compactGuideLines[0]}
+            </div>
+            <div style="margin-top:4px;">${checklistHtml}</div>`
       }
-      <div style="margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:6px;">
-        <button data-step-back style="padding:5px 10px; border-radius:8px; background:rgba(51,65,85,0.85); color:#f8fafc; border:1px solid rgba(148,163,184,0.45); cursor:pointer; font-weight:800; font-size:0.78em;">
-          &larr; Step Back to Lab (Esc)
+      <div style="margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+        <button data-step-back style="padding:5px 9px; border-radius:8px; background:rgba(51,65,85,0.85); color:#f8fafc; border:1px solid rgba(148,163,184,0.45); cursor:pointer; font-weight:800; font-size:0.75em;">
+          &larr; Lab (Esc)
         </button>
-        <span style="font-size:0.72em; color:#fbbf24; font-weight:700;">${desc.benchmarks.join(' • ')}</span>
+        <button data-demo-step style="padding:5px 9px; border-radius:8px; background:rgba(14,165,233,0.28); color:#7dd3fc; border:1px solid rgba(56,189,248,0.55); cursor:pointer; font-weight:800; font-size:0.75em;">
+          Demo Step &#9654;
+        </button>
+        <span style="font-size:0.7em; color:#fbbf24; font-weight:700;">${desc.benchmarks.join(' • ')}</span>
       </div>
     `;
 
     this.guideCard.querySelector('[data-guide-toggle]')?.addEventListener('click', () => {
       this.callbacks.onUiClick();
       this.guideMinimized = !this.guideMinimized;
-      this.renderGuideCard(stationId);
+      this.renderGuideCard(state, stationId);
     });
     this.guideCard.querySelector('[data-step-back]')?.addEventListener('click', () => {
       this.callbacks.onUiClick();
       this.callbacks.onExitStationFocus();
+    });
+    this.guideCard.querySelector('[data-demo-step]')?.addEventListener('click', () => {
+      this.callbacks.onUiClick();
+      this.callbacks.onDemoStep(stationId);
     });
   }
 

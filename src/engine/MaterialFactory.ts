@@ -27,7 +27,8 @@ export type MaterialPresetName =
   | 'skylightGlass'
   | 'oakWoodTrim'
   | 'mineralDull'
-  | 'mineralRough';
+  | 'mineralRough'
+  | 'velvetTray';
 
 interface GeneratedTextureSet {
   albedo: THREE.CanvasTexture;
@@ -217,45 +218,45 @@ export class MaterialFactory {
     pmrem.compileEquirectangularShader();
 
     const envScene = new THREE.Scene();
-    envScene.background = new THREE.Color(0xdbeafe);
+    envScene.background = new THREE.Color(0x0b111b);
 
-    // Sunlit architectural hall enclosure gradient
+    // High-contrast studio dome enclosure
     const domeGeo = new THREE.SphereGeometry(24, 24, 16);
     const domeMat = new THREE.MeshBasicMaterial({
-      color: 0xcbd5e1,
+      color: 0x152030,
       side: THREE.BackSide,
     });
     envScene.add(new THREE.Mesh(domeGeo, domeMat));
 
-    // Overhead daylight skylight banks (crisp crisp key reflections on glassware & metals)
-    const softboxGeo = new THREE.PlaneGeometry(11, 4.2);
+    // Crisp overhead studio softbox banks for sharp glassware & metal specular highlights
+    const softboxGeo = new THREE.PlaneGeometry(11, 3.6);
     const softboxMatDaylight = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(2.9, 2.85, 2.7),
+      color: new THREE.Color(2.5, 2.45, 2.3),
       side: THREE.DoubleSide,
     });
     const softboxMatSky = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(2.0, 2.45, 2.85),
+      color: new THREE.Color(1.9, 2.25, 2.65),
       side: THREE.DoubleSide,
     });
 
     const topPanel1 = new THREE.Mesh(softboxGeo, softboxMatDaylight);
-    topPanel1.position.set(-5, 11, 0);
+    topPanel1.position.set(-5.5, 11, 0);
     topPanel1.rotation.x = Math.PI / 2;
     envScene.add(topPanel1);
 
     const topPanel2 = new THREE.Mesh(softboxGeo, softboxMatSky);
-    topPanel2.position.set(5, 11, 0);
+    topPanel2.position.set(5.5, 11, 0);
     topPanel2.rotation.x = Math.PI / 2;
     envScene.add(topPanel2);
 
-    // Warm sunlit window strips along Wing A & Wing B walls
-    const stripGeo = new THREE.PlaneGeometry(2.2, 8);
+    // Accent studio rim light strips along East & West walls
+    const stripGeo = new THREE.PlaneGeometry(1.6, 8);
     const skyWindowMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(1.4, 2.2, 2.6),
+      color: new THREE.Color(1.2, 1.9, 2.4),
       side: THREE.DoubleSide,
     });
     const warmWindowMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(2.5, 2.2, 1.75),
+      color: new THREE.Color(2.2, 1.95, 1.55),
       side: THREE.DoubleSide,
     });
 
@@ -269,9 +270,9 @@ export class MaterialFactory {
     rightRim.lookAt(0, 2, 0);
     envScene.add(rightRim);
 
-    // Bright terrazzo lab floor bounce
+    // Dark charcoal slate lab floor bounce
     const floorGeo = new THREE.PlaneGeometry(32, 32);
-    const floorMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, side: THREE.DoubleSide });
+    const floorMat = new THREE.MeshBasicMaterial({ color: 0x1a2230, side: THREE.DoubleSide });
     const floorMesh = new THREE.Mesh(floorGeo, floorMat);
     floorMesh.position.y = -4;
     floorMesh.rotation.x = -Math.PI / 2;
@@ -519,26 +520,26 @@ export class MaterialFactory {
         mat.emissiveIntensity = 0.05;
         break;
       case 'terrazzoFloor':
-        mat.metalness = 0.06;
-        mat.roughness = 0.34;
-        mat.normalScale.set(0.22, 0.22);
-        mat.envMapIntensity = 0.85;
+        mat.metalness = 0.14;
+        mat.roughness = 0.28;
+        mat.normalScale.set(0.24, 0.24);
+        mat.envMapIntensity = 1.05;
         break;
       case 'labWallPanel':
-        mat.metalness = 0.04;
-        mat.roughness = 0.62;
-        mat.normalScale.set(0.32, 0.32);
-        mat.envMapIntensity = 0.7;
+        mat.metalness = 0.08;
+        mat.roughness = 0.72;
+        mat.normalScale.set(0.38, 0.38);
+        mat.envMapIntensity = 0.65;
         break;
       case 'skylightGlass':
         mat.metalness = 0.0;
-        mat.roughness = 0.15;
-        mat.emissive = new THREE.Color(0xf8fafc);
-        mat.emissiveIntensity = 0.82;
+        mat.roughness = 0.2;
+        mat.emissive = new THREE.Color(0xe2e8f0);
+        mat.emissiveIntensity = 0.55;
         break;
       case 'oakWoodTrim':
         mat.metalness = 0.02;
-        mat.roughness = 0.55;
+        mat.roughness = 0.58;
         mat.normalScale.set(0.45, 0.45);
         break;
       case 'mineralDull':
@@ -552,6 +553,12 @@ export class MaterialFactory {
         mat.roughness = 0.96;
         mat.normalScale.set(1.35, 1.35);
         mat.envMapIntensity = 0.3;
+        break;
+      case 'velvetTray':
+        mat.metalness = 0.0;
+        mat.roughness = 0.96;
+        mat.normalScale.set(0.75, 0.75);
+        mat.envMapIntensity = 0.18;
         break;
     }
 
@@ -785,66 +792,57 @@ export class MaterialFactory {
           eg = clampByte(glow * 105);
           eb = clampByte(glow * 18);
         } else if (preset === 'terrazzoFloor') {
-          normalStrength = 0.8;
-          const tileSeam = ((u * 2) % 1) < 0.018 || ((v * 2) % 1) < 0.018;
-          const baseNoise = fbmTileable(u, v, { seed: 223, octaves: 3, baseFreq: 10 });
-          const fleck = hash2D(x >> 1, y >> 1, size >> 1, 241);
-          const isDarkChip = fleck > 0.94;
-          const isTealChip = fleck > 0.905 && fleck <= 0.94;
-          h = tileSeam ? 0.25 : 0.65 + baseNoise * 0.15;
+          normalStrength = 1.15;
+          needsMetalMap = true;
+          const tileSeam = ((u * 2) % 1) < 0.022 || ((v * 2) % 1) < 0.022;
+          const baseNoise = fbmTileable(u, v, { seed: 223, octaves: 4, baseFreq: 10 });
+          const slateGrain = fbmTileable(u, v, { seed: 241, octaves: 3, baseFreq: 18 });
+          h = tileSeam ? 0.18 : 0.62 + baseNoise * 0.22;
           if (tileSeam) {
-            r = 165;
-            g = 175;
-            b = 188;
-            rough = 145;
-          } else if (isDarkChip) {
-            r = 128;
-            g = 140;
-            b = 156;
-            rough = 95;
-          } else if (isTealChip) {
-            r = 162;
-            g = 205;
-            b = 212;
-            rough = 78;
+            r = 14;
+            g = 18;
+            b = 26;
+            rough = 175;
+            metal = 8;
           } else {
-            const lum = 216 + baseNoise * 22;
-            r = lum * 0.97;
-            g = lum * 0.99;
-            b = lum * 1.02;
-            rough = 72 + baseNoise * 32;
+            const lum = 34 + baseNoise * 16 + slateGrain * 8;
+            r = lum * 0.9;
+            g = lum * 0.98;
+            b = lum * 1.14;
+            rough = 64 + baseNoise * 38;
+            metal = 36;
           }
         } else if (preset === 'labWallPanel') {
-          normalStrength = 1.0;
-          const seam = ((u * 3) % 1) < 0.02 || ((v * 2) % 1) < 0.02;
+          normalStrength = 1.25;
+          const seam = ((u * 3) % 1) < 0.022 || ((v * 2) % 1) < 0.022;
           const weave = fbmTileable(u, v, { seed: 257, octaves: 3, baseFreq: 14 });
-          h = seam ? 0.3 : 0.7 + weave * 0.15;
-          const base = seam ? 192 : 228 + weave * 18;
-          r = base * 0.97;
-          g = base * 0.99;
-          b = base * 1.02;
-          rough = seam ? 190 : 150 + weave * 35;
+          h = seam ? 0.22 : 0.68 + weave * 0.18;
+          const base = seam ? 24 : 38 + weave * 14;
+          r = base * 0.92;
+          g = base * 1.0;
+          b = base * 1.14;
+          rough = seam ? 205 : 165 + weave * 35;
         } else if (preset === 'skylightGlass') {
           needsEmissiveMap = true;
           normalStrength = 0.4;
-          const mullion = ((u * 2) % 1) < 0.04 || ((v * 2) % 1) < 0.04;
+          const mullion = ((u * 2) % 1) < 0.045 || ((v * 2) % 1) < 0.045;
           const sky = fbmTileable(u, v, { seed: 271, octaves: 2, baseFreq: 4 });
           h = mullion ? 0.2 : 0.8;
-          r = mullion ? 175 : 238 + sky * 16;
-          g = mullion ? 185 : 246 + sky * 8;
-          b = mullion ? 198 : 255;
-          rough = mullion ? 120 : 28;
-          er = mullion ? 0 : 225;
-          eg = mullion ? 0 : 240;
-          eb = mullion ? 0 : 255;
+          r = mullion ? 48 : 210 + sky * 22;
+          g = mullion ? 56 : 224 + sky * 18;
+          b = mullion ? 68 : 240;
+          rough = mullion ? 120 : 32;
+          er = mullion ? 0 : 175;
+          eg = mullion ? 0 : 192;
+          eb = mullion ? 0 : 212;
         } else if (preset === 'oakWoodTrim') {
           normalStrength = 1.4;
           const grain = fbmTileable(u, v, { seed: 283, octaves: 4, baseFreq: 6, streakX: 1, streakY: 16 });
           h = grain;
-          r = 168 + grain * 42;
-          g = 124 + grain * 34;
-          b = 78 + grain * 24;
-          rough = 125 + grain * 55;
+          r = 128 + grain * 36;
+          g = 94 + grain * 28;
+          b = 62 + grain * 20;
+          rough = 135 + grain * 55;
         } else if (preset === 'mineralDull') {
           normalStrength = 2.6;
           const grit = fbmTileable(u, v, { seed: 307, octaves: 4, baseFreq: 16 });
@@ -864,6 +862,14 @@ export class MaterialFactory {
           g = vBase;
           b = vBase;
           rough = 235;
+        } else if (preset === 'velvetTray') {
+          normalStrength = 1.8;
+          const nap = fbmTileable(u, v, { seed: 353, octaves: 4, baseFreq: 28 });
+          h = nap;
+          r = 16 + nap * 10;
+          g = 20 + nap * 12;
+          b = 34 + nap * 16;
+          rough = 238 + nap * 14;
         }
 
         height[pIdx] = h;

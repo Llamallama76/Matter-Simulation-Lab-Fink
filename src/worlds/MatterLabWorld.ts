@@ -26,6 +26,14 @@ import { PlayerController } from '../player/PlayerController';
 import {
   type LabStationId,
   MatterEngine,
+  type ScratchToolId,
+  type Station1SpecimenId,
+  type Station2SpecimenId,
+  type Station3MagnetItemId,
+  type Station3ScentJarId,
+  type Station4ObjectId,
+  type Station6CategoryId,
+  type Station10BeakerMaterialId,
   type StationActionFeedback,
 } from '../science/MatterEngine';
 import { GameHUD } from '../ui/GameHUD';
@@ -53,6 +61,7 @@ export class MatterLabWorld {
   private simulationFrozen = false;
   private particleVision = false;
   private cleanView = false;
+  private selectedStation2Tool: ScratchToolId = 'copper_penny';
   private simTimeSeconds = 0;
   private lastFrameMs = 0;
   private rafId: number | null = null;
@@ -75,7 +84,7 @@ export class MatterLabWorld {
     const width = window.innerWidth || 1280;
     const height = window.innerHeight || 720;
 
-    // 1. Renderer setup with ACES Filmic Tone Mapping
+    // 1. Renderer setup with ACES Filmic Tone Mapping (High-Contrast Studio Exposure)
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
@@ -83,22 +92,22 @@ export class MatterLabWorld {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.02;
+    this.renderer.toneMappingExposure = 0.9;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.camera = new THREE.PerspectiveCamera(50, width / height, 0.08, 75);
-    this.scene.background = new THREE.Color(0xdbeafe);
-    this.scene.fog = new THREE.FogExp2(0xe2e8f0, 0.008);
+    this.scene.background = new THREE.Color(0x0b1019);
+    this.scene.fog = null;
 
-    // 2. Procedural PBR Materials & Sunlit Research Hall IBL Dome
+    // 2. Procedural PBR Materials & High-Contrast Studio Hall IBL Dome
     this.materials = new MaterialFactory(this.qualityTier);
     this.scene.environment = this.materials.buildLabEnvironment(this.renderer);
 
-    // 3. Bright Sunlit Daylight Lighting Rig across 34 m × 24 m Hall
-    const hemi = new THREE.HemisphereLight(0xf0f9ff, 0x94a3b8, 1.15);
+    // 3. Crisp High-Contrast Studio Lighting Rig (Key Light + Cool Fill; SpotLights per bench)
+    const hemi = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.55);
     this.scene.add(hemi);
 
-    this.keyLight = new THREE.DirectionalLight(0xfffbeb, 2.25);
+    this.keyLight = new THREE.DirectionalLight(0xfff7ed, 1.65);
     this.keyLight.position.set(5.5, 11.5, 6.5);
     this.keyLight.shadow.bias = -0.0004;
     this.keyLight.shadow.camera.near = 1.0;
@@ -109,10 +118,10 @@ export class MatterLabWorld {
     this.keyLight.shadow.camera.bottom = -13;
     this.scene.add(this.keyLight);
 
-    const wingAFill = new THREE.PointLight(0xe0f2fe, 2.4, 20, 1.4);
-    wingAFill.position.set(-7.5, 4.6, 0);
-    const wingBFill = new THREE.PointLight(0xecfdf5, 2.4, 20, 1.4);
-    wingBFill.position.set(7.5, 4.6, 0);
+    const wingAFill = new THREE.PointLight(0x7dd3fc, 1.15, 18, 1.6);
+    wingAFill.position.set(-7.5, 4.4, 0);
+    const wingBFill = new THREE.PointLight(0x6ee7b7, 1.15, 18, 1.6);
+    wingBFill.position.set(7.5, 4.4, 0);
     this.scene.add(wingAFill, wingBFill);
 
     // 4. Parametric 10-Station Research Hall Scene
@@ -143,10 +152,17 @@ export class MatterLabWorld {
       obstacleBoxes: this.props.obstacleBoxes,
       onStationSelected: (stationId) => this.onArrivedAtStation(stationId),
       onAtom5Clicked: () => this.openVoluntaryAtom5Tip(),
+      onHoverTargetChange: (info) => {
+        this.props.setHoveredObject(info?.mesh ?? null);
+        this.gameHud.setHoverHint(info);
+      },
+      onApparatusClick: (stationId, action) => this.handleApparatusClick(stationId, action),
       onNavigationModeChange: (mode, stationId) => {
         if (mode === 'roam') {
           this.engine.exitToRoamMode();
           this.props.highlightStation('overview');
+          this.props.setHoveredObject(null);
+          this.gameHud.setHoverHint(null);
           this.gameHud.closeAtom5Popover();
         } else if (stationId) {
           this.engine.enterStationFocus(stationId);
@@ -221,10 +237,12 @@ export class MatterLabWorld {
         const fb = this.engine.inspectStation1Specimen(specimenId, magnifierActive);
         this.handleActionFeedback(fb);
       },
-      onStation2SelectTool: () => {
+      onStation2SelectTool: (tool) => {
+        this.selectedStation2Tool = tool;
         this.sound.playTweezersClick();
       },
       onStation2Scratch: (specimenId, tool) => {
+        this.selectedStation2Tool = tool;
         const fb = this.engine.runStation2ScratchTest(specimenId, tool);
         const didScratch = fb.headline.includes('Scratched');
         this.sound.playScratchSound(didScratch);
@@ -359,6 +377,7 @@ export class MatterLabWorld {
         this.engine.resetStation10RaceBeakers();
         this.syncAllUi();
       },
+      onDemoStep: (stationId) => this.runDemoStep(stationId),
       onUiClick: () => this.sound.playUiClick(),
     });
 
@@ -398,7 +417,7 @@ export class MatterLabWorld {
       onUiClick: () => this.sound.playUiClick(),
     });
 
-    // Initialize tier, start in sunlit Lab Roam Overview
+    // Initialize tier, start in high-contrast Studio Lab Roam Overview
     this.applyQualityTier(this.qualityTier);
     this.player.jumpToOverview();
     this.syncAllUi();
@@ -444,6 +463,310 @@ export class MatterLabWorld {
     this.props.highlightStation(stationId);
     this.player.setAtom5Mood('happy');
     this.syncAllUi();
+  }
+
+  private handleApparatusClick(_stationId: LabStationId, action: string): void {
+    const parts = action.split(':');
+    const prefix = parts[0];
+    const cmd = parts[1];
+    const arg = parts[2];
+
+    if (prefix === 's1') {
+      const st1 = this.engine.getStation1State();
+      if (cmd === 'toggleMag') {
+        this.sound.playTweezersClick();
+        this.handleActionFeedback(
+          this.engine.inspectStation1Specimen(st1.activeSpecimenId, !st1.magnifierActive),
+        );
+      } else if (cmd === 'inspect' && arg) {
+        this.sound.playTweezersClick();
+        this.handleActionFeedback(
+          this.engine.inspectStation1Specimen(arg as Station1SpecimenId, true),
+        );
+      }
+      return;
+    }
+
+    if (prefix === 's2') {
+      if (cmd === 'tool' && arg) {
+        this.selectedStation2Tool = arg as ScratchToolId;
+        this.sound.playTweezersClick();
+        this.gameHud.showActionFeedback({
+          stationId: 'station_2_hardness_scratch',
+          headline:
+            this.selectedStation2Tool === 'copper_penny'
+              ? 'Equipped Copper Penny Tool'
+              : 'Equipped Steel Nail Tool',
+          observation: 'Click any clamped sample on the bench to perform a scratch test.',
+          scientificExplanation:
+            'Hardness compares which solid is harder by seeing whether one solid scratches another.',
+          benchmarksAddressed: ['SC.5.P.8.1'],
+          triggeredMisconceptions: [],
+        });
+      } else if (cmd === 'scratch' && arg) {
+        this.anims.scratchPulse = 1.0;
+        const fb = this.engine.runStation2ScratchTest(
+          arg as Station2SpecimenId,
+          this.selectedStation2Tool,
+        );
+        this.sound.playScratchSound(fb.headline.includes('Scratched'));
+        this.handleActionFeedback(fb);
+      }
+      return;
+    }
+
+    if (prefix === 's3') {
+      if (cmd === 'magnet' && arg) {
+        const fb = this.engine.testStation3Magnet(arg as Station3MagnetItemId);
+        if (fb.headline.includes('YES')) this.sound.playMagnetHum();
+        else this.sound.playGlassClink();
+        this.handleActionFeedback(fb);
+      } else if (cmd === 'waft' && arg) {
+        this.sound.playWaftBreeze();
+        this.anims.waftPulse = 1.0;
+        this.handleActionFeedback(this.engine.waftStation3Jar(arg as Station3ScentJarId));
+      }
+      return;
+    }
+
+    if (prefix === 's4' && cmd === 'weigh' && arg) {
+      const objId = arg as Station4ObjectId;
+      const st4 = this.engine.getStation4State();
+      if (st4.objectOnBalance === objId) {
+        this.sound.playWaterPlop();
+        this.handleActionFeedback(this.engine.submergeStation4Object(objId));
+      } else {
+        this.sound.playGlassClink();
+        this.handleActionFeedback(this.engine.weighStation4Object(objId));
+      }
+      return;
+    }
+
+    if (prefix === 's6') {
+      if (cmd === 'next') {
+        const nextUnsorted = this.engine.getStation6State().pieces.find((p) => !p.sortedIntoBin);
+        if (!nextUnsorted) return;
+        this.sound.playTweezersClick();
+        this.anims.tweezersPulse = 1.0;
+        const fb = this.engine.sortStation6Piece(nextUnsorted.pieceId);
+        if (this.engine.getStation6State().allSorted) this.sound.playSuccessFanfare();
+        this.handleActionFeedback(fb);
+      } else if (cmd === 'sort' && arg) {
+        this.sound.playTweezersClick();
+        this.anims.tweezersPulse = 1.0;
+        const fb = this.engine.sortStation6ByCategory(arg as Station6CategoryId | 'all');
+        if (this.engine.getStation6State().allSorted) this.sound.playSuccessFanfare();
+        this.handleActionFeedback(fb);
+      }
+      return;
+    }
+
+    if (prefix === 's7') {
+      if (cmd === 'sweep') {
+        this.sound.playMagnetHum();
+        this.anims.magnetSweepPulse = 1.0;
+        this.handleActionFeedback(this.engine.sweepStation7Magnet());
+      } else if (cmd === 'release') {
+        this.sound.playGlassClink();
+        const fb = this.engine.releaseStation7MagnetToDish();
+        if (this.engine.getStation7State().isSeparatedPure) this.sound.playSuccessFanfare();
+        this.handleActionFeedback(fb);
+      }
+      return;
+    }
+
+    if (prefix === 's8' && cmd === 'shake') {
+      this.sound.playSieveRattle();
+      this.anims.sieveShakePulse = 1.0;
+      const fb = this.engine.pourAndShakeStation8Sieve();
+      this.sound.playSuccessFanfare();
+      this.handleActionFeedback(fb);
+      return;
+    }
+
+    if (prefix === 's9') {
+      if (cmd === 'filter') {
+        this.sound.playFilterDrip();
+        this.anims.filterPourPulse = 1.0;
+        this.handleActionFeedback(this.engine.pourStation9ThroughFilter());
+      } else if (cmd === 'evaporate') {
+        this.sound.playBoilingAndSizzle();
+        this.anims.evaporatePulse = 1.0;
+        const fb = this.engine.evaporateStation9Filtrate();
+        if (this.engine.getStation9State().stage === 'evaporated') this.sound.playSuccessFanfare();
+        this.handleActionFeedback(fb);
+      }
+      return;
+    }
+
+    if (prefix === 's10') {
+      if (cmd === 'parta' && arg) {
+        this.sound.playWaterPour();
+        this.handleActionFeedback(
+          this.engine.testStation10SolubilityBeaker(arg as Station10BeakerMaterialId),
+        );
+      } else if (cmd === 'race' && arg === 'start') {
+        this.sound.playWaterPour();
+        this.engine.startStation10DissolvingRace();
+        this.syncAllUi();
+      }
+    }
+  }
+
+  private runDemoStep(stationId: LabStationId): void {
+    switch (stationId) {
+      case 'station_1_luster_texture': {
+        const st1 = this.engine.getStation1State();
+        const ids = Object.keys(st1.inspectedSpecimens) as Station1SpecimenId[];
+        const nextId = ids.find((id) => !st1.inspectedSpecimens[id]) ?? 'pyrite_copper_nugget';
+        this.sound.playTweezersClick();
+        this.handleActionFeedback(this.engine.inspectStation1Specimen(nextId, true));
+        break;
+      }
+      case 'station_2_hardness_scratch': {
+        const st2 = this.engine.getStation2State();
+        const ids = Object.keys(st2.scratchRecords) as Station2SpecimenId[];
+        let targetSpec = ids.find((id) => !st2.scratchRecords[id].testedWithPenny);
+        let tool: ScratchToolId = 'copper_penny';
+        if (!targetSpec) {
+          targetSpec = ids.find((id) => !st2.scratchRecords[id].testedWithNail) ?? 'quartz_crystal_s2';
+          tool = 'steel_nail';
+        }
+        this.selectedStation2Tool = tool;
+        this.anims.scratchPulse = 1.0;
+        const fb = this.engine.runStation2ScratchTest(targetSpec, tool);
+        this.sound.playScratchSound(fb.headline.includes('Scratched'));
+        this.handleActionFeedback(fb);
+        break;
+      }
+      case 'station_3_magnetism_wafting': {
+        const st3 = this.engine.getStation3State();
+        const magIds = Object.keys(st3.magnetTested) as Station3MagnetItemId[];
+        const nextMag = magIds.find((id) => !st3.magnetTested[id]);
+        if (nextMag) {
+          const fb = this.engine.testStation3Magnet(nextMag);
+          if (fb.headline.includes('YES')) this.sound.playMagnetHum();
+          else this.sound.playGlassClink();
+          this.handleActionFeedback(fb);
+        } else {
+          const jarIds = Object.keys(st3.waftedJars) as Station3ScentJarId[];
+          const nextJar = jarIds.find((id) => !st3.waftedJars[id]) ?? 'vanilla_jar';
+          this.sound.playWaftBreeze();
+          this.anims.waftPulse = 1.0;
+          this.handleActionFeedback(this.engine.waftStation3Jar(nextJar));
+        }
+        break;
+      }
+      case 'station_4_mass_volume': {
+        const st4 = this.engine.getStation4State();
+        const objIds = Object.keys(st4.weighedObjects) as Station4ObjectId[];
+        const nextWeigh = objIds.find((id) => !st4.weighedObjects[id]);
+        if (nextWeigh) {
+          this.sound.playGlassClink();
+          this.handleActionFeedback(this.engine.weighStation4Object(nextWeigh));
+        } else {
+          const nextSub = objIds.find((id) => !st4.submergedObjects[id]) ?? 'brass_cylinder';
+          this.sound.playWaterPlop();
+          this.handleActionFeedback(this.engine.submergeStation4Object(nextSub));
+        }
+        break;
+      }
+      case 'station_5_thermal_states': {
+        const st5 = this.engine.getStation5State();
+        const nextTemp = !st5.observedSolid ? -8 : !st5.observedLiquid ? 22 : !st5.observedGasBoiling ? 100 : -8;
+        if (nextTemp >= 100) this.sound.playBoilingAndSizzle();
+        else this.sound.playUiClick();
+        this.handleActionFeedback(this.engine.setStation5Temperature(nextTemp));
+        break;
+      }
+      case 'station_6_tweezers_sorting': {
+        const st6 = this.engine.getStation6State();
+        if (st6.allSorted) {
+          this.engine.resetStation6();
+          this.syncAllUi();
+        } else {
+          const nextPiece = st6.pieces.find((p) => !p.sortedIntoBin);
+          if (nextPiece) {
+            this.sound.playTweezersClick();
+            this.anims.tweezersPulse = 1.0;
+            const fb = this.engine.sortStation6Piece(nextPiece.pieceId);
+            if (this.engine.getStation6State().allSorted) this.sound.playSuccessFanfare();
+            this.handleActionFeedback(fb);
+          }
+        }
+        break;
+      }
+      case 'station_7_iron_sand_magnet': {
+        const st7 = this.engine.getStation7State();
+        if (st7.ironInTrayGrams > 0.1) {
+          this.sound.playMagnetHum();
+          this.anims.magnetSweepPulse = 1.0;
+          this.handleActionFeedback(this.engine.sweepStation7Magnet());
+        } else if (st7.ironOnMagnetGrams > 0.1) {
+          this.sound.playGlassClink();
+          const fb = this.engine.releaseStation7MagnetToDish();
+          if (this.engine.getStation7State().isSeparatedPure) this.sound.playSuccessFanfare();
+          this.handleActionFeedback(fb);
+        } else {
+          this.engine.resetStation7();
+          this.syncAllUi();
+        }
+        break;
+      }
+      case 'station_8_sand_gravel_sieve': {
+        const st8 = this.engine.getStation8State();
+        if (!st8.sieveShaken) {
+          this.sound.playSieveRattle();
+          this.anims.sieveShakePulse = 1.0;
+          const fb = this.engine.pourAndShakeStation8Sieve();
+          this.sound.playSuccessFanfare();
+          this.handleActionFeedback(fb);
+        } else {
+          this.engine.resetStation8();
+          this.syncAllUi();
+        }
+        break;
+      }
+      case 'station_9_filtration_evaporation': {
+        const st9 = this.engine.getStation9State();
+        if (st9.stage === 'beaker_ready') {
+          this.sound.playFilterDrip();
+          this.anims.filterPourPulse = 1.0;
+          this.handleActionFeedback(this.engine.pourStation9ThroughFilter());
+        } else if (st9.stage === 'filtered') {
+          this.sound.playBoilingAndSizzle();
+          this.anims.evaporatePulse = 1.0;
+          const fb = this.engine.evaporateStation9Filtrate();
+          if (this.engine.getStation9State().stage === 'evaporated') this.sound.playSuccessFanfare();
+          this.handleActionFeedback(fb);
+        } else {
+          this.engine.resetStation9();
+          this.anims.evaporatePulse = 0;
+          this.syncAllUi();
+        }
+        break;
+      }
+      case 'station_10_solutions_dissolving': {
+        const st10 = this.engine.getStation10State();
+        const partAKeys = Object.keys(st10.solubilityBeakers) as Station10BeakerMaterialId[];
+        const nextTest = partAKeys.find((k) => !st10.solubilityBeakers[k].tested);
+        if (nextTest) {
+          this.sound.playWaterPour();
+          this.handleActionFeedback(this.engine.testStation10SolubilityBeaker(nextTest));
+        } else if (!st10.fairTest.isControlledFairTest) {
+          this.engine.configureStation10RaceBeaker('beaker_b', { waterTempPreset: 'warm' });
+          this.syncAllUi();
+        } else if (st10.latestRaceSummary === null && !st10.stopwatchRunning) {
+          this.sound.playWaterPour();
+          this.engine.startStation10DissolvingRace();
+          this.syncAllUi();
+        } else {
+          this.engine.resetStation10RaceBeakers();
+          this.syncAllUi();
+        }
+        break;
+      }
+    }
   }
 
   private handleActionFeedback(fb: StationActionFeedback): void {
